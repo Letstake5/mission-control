@@ -5,7 +5,7 @@ import {
   signOut,
   onAuthStateChanged,
 } from "firebase/auth";
-import { fsGet, fsSet, fsListen, PATHS } from "./db";
+import { fsGet, fsSet, PATHS } from "./db";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const DEFAULT_FAMILIES = [
@@ -170,7 +170,42 @@ function MissionCompletePopup({xpEarned,onClose}) {
   );
 }
 
-// ── Access Gate (students: name + PIN; teachers: email + password) ─────────────
+// ── Teacher PIN Gate ──────────────────────────────────────────────────────────
+// Shown when someone clicks "Teacher View" from the Launch Pad without being
+// logged in via Firebase. Any valid teacher PIN grants access.
+function TeacherPinGate({teachers, onSuccess, onCancel}) {
+  const [pin, setPin] = useState("");
+  const [err, setErr] = useState("");
+
+  function attempt() {
+    setErr("");
+    if(!pin.trim()){ setErr("Please enter a PIN."); return; }
+    const match = Object.values(teachers||{}).find(t => t.pin && t.pin === pin.trim());
+    if(match){ onSuccess(); }
+    else { setErr("Incorrect PIN. Try again."); setPin(""); }
+  }
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:200,padding:"1rem"}}>
+      <div style={{background:CARD,borderRadius:20,padding:"2rem",width:"100%",maxWidth:320,textAlign:"center",border:"1px solid #2a2a5a"}}>
+        <div style={{fontSize:36,marginBottom:8}}>🔒</div>
+        <h3 style={{margin:"0 0 4px",fontWeight:800,fontSize:20,color:"#fff"}}>Teacher Access</h3>
+        <p style={{margin:"0 0 16px",fontSize:13,color:"#888",fontWeight:600}}>Enter your teacher PIN</p>
+        <input type="password" value={pin} onChange={e=>{setPin(e.target.value);setErr("");}}
+          onKeyDown={e=>e.key==="Enter"&&attempt()}
+          placeholder="PIN"
+          style={{width:"100%",fontSize:22,padding:"11px",borderRadius:9,border:`1.5px solid ${BLUE}55`,background:"#0a0a1a",color:"#fff",fontWeight:700,textAlign:"center",boxSizing:"border-box",marginBottom:10}}/>
+        {err&&<p style={{color:"#e05050",fontWeight:700,fontSize:13,margin:"0 0 10px"}}>{err}</p>}
+        <div style={{display:"flex",gap:8}}>
+          <button onClick={onCancel} style={{flex:1,padding:"11px",borderRadius:8,border:"1.5px solid #2a2a5a",background:"transparent",fontWeight:700,fontSize:15,cursor:"pointer",color:"#888"}}>Cancel</button>
+          <button onClick={attempt} style={{flex:1,padding:"11px",borderRadius:8,border:"none",background:BLUE,color:"#fff",fontWeight:700,fontSize:15,cursor:"pointer"}}>Enter</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Access Gate (front door) ──────────────────────────────────────────────────
 function AccessGate({pins, onStudentGranted, onTeacherGranted}) {
   const [tab, setTab]=useState("student");
   const [nameInput,setNameInput]=useState("");
@@ -224,7 +259,6 @@ function AccessGate({pins, onStudentGranted, onTeacherGranted}) {
           <button style={tabStyle(tab==="student")} onClick={()=>{setTab("student");setErr("");}}>🎓 Student</button>
           <button style={tabStyle(tab==="teacher")} onClick={()=>{setTab("teacher");setErr("");}}>🔒 Teacher</button>
         </div>
-
         {tab==="student"&&(
           <>
             <p style={{fontSize:12,color:"#555",fontWeight:600,margin:"0 0 8px"}}>Name as it appears on your button, no spaces — e.g. <span style={{color:ACCENT}}>ZachS</span></p>
@@ -242,7 +276,6 @@ function AccessGate({pins, onStudentGranted, onTeacherGranted}) {
             </button>
           </>
         )}
-
         {tab==="teacher"&&(
           <>
             <p style={{fontSize:13,color:"#888",fontWeight:600,margin:"0 0 12px",textAlign:"center"}}>Sign in with your teacher account</p>
@@ -267,7 +300,7 @@ function AccessGate({pins, onStudentGranted, onTeacherGranted}) {
 }
 
 // ── Launch Pad ────────────────────────────────────────────────────────────────
-function LaunchPad({families,sessions,streaks,balances,onSelectStudent,onTeacherAccess,onLogout}) {
+function LaunchPad({families,sessions,streaks,balances,onSelectStudent,onTeacherAccess,onLogout,isTeacher}) {
   const [tick,setTick]=useState(0);
   useEffect(()=>{ const t=setInterval(()=>setTick(x=>x+1),30000); return ()=>clearInterval(t); },[]);
   const totalStudents=families.flatMap(f=>f.students).length;
@@ -310,7 +343,9 @@ function LaunchPad({families,sessions,streaks,balances,onSelectStudent,onTeacher
         </div>
       ))}
       <div style={{marginTop:"1rem",paddingTop:"1rem",borderTop:"1px solid #1a1a3a"}}>
-        <button onClick={onTeacherAccess} style={{width:"100%",padding:"12px",borderRadius:10,border:"1px solid #2a2a5a",background:CARD,color:"#888",fontWeight:700,fontSize:14,cursor:"pointer"}}>🔒 Teacher View</button>
+        <button onClick={onTeacherAccess} style={{width:"100%",padding:"12px",borderRadius:10,border:"1px solid #2a2a5a",background:CARD,color:"#888",fontWeight:700,fontSize:14,cursor:"pointer"}}>
+          🔒 {isTeacher ? "Back to Teacher View" : "Teacher View"}
+        </button>
       </div>
     </div>
   );
@@ -448,6 +483,113 @@ function ManageStudents({families,onChange,onBack}) {
             style={{flex:1,fontSize:14,padding:"8px 12px",borderRadius:8,border:"1.5px solid #2a2a5a",background:"#0a0a1a",color:"#fff",fontWeight:600}}/>
           <button onClick={addFamily} style={{fontWeight:700,fontSize:14,background:BLUE,color:"#fff",border:"none",borderRadius:8,padding:"8px 16px",cursor:"pointer"}}>Add</button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Manage Teachers ───────────────────────────────────────────────────────────
+function ManageTeachers({teachers, onTeachersChange, onBack}) {
+  const [showPins, setShowPins] = useState({});
+  const [form, setForm] = useState({name:"", email:"", pin:""});
+  const [saved, setSaved] = useState(false);
+  const [err, setErr] = useState("");
+  const [confirm, setConfirm] = useState(null);
+  const [editPins, setEditPins] = useState({});
+
+  function addTeacher() {
+    setErr("");
+    if(!form.name.trim()){ setErr("Name is required."); return; }
+    if(!form.email.trim()||!form.email.includes("@")){ setErr("Valid email is required."); return; }
+    if(!form.pin.trim()){ setErr("PIN is required."); return; }
+    const id = normalizeId(form.email);
+    const next = {...teachers, [id]: {name:form.name.trim(), email:form.email.trim(), pin:form.pin.trim()}};
+    onTeachersChange(next);
+    setForm({name:"", email:"", pin:""});
+    setSaved(true); setTimeout(()=>setSaved(false), 2000);
+  }
+
+  function removeTeacher(id) {
+    const t = teachers[id];
+    setConfirm({msg:`Remove teacher "${t?.name}"?`, cb:()=>{
+      const next={...teachers}; delete next[id]; onTeachersChange(next);
+    }});
+  }
+
+  function saveEditPin(id) {
+    const newPin = (editPins[id]||"").trim();
+    if(!newPin) return;
+    onTeachersChange({...teachers, [id]:{...teachers[id], pin:newPin}});
+    setEditPins(e=>({...e,[id]:""}));
+  }
+
+  const list = Object.entries(teachers||{});
+
+  return (
+    <div style={{background:BG,minHeight:"100vh",padding:"1.5rem"}}>
+      {confirm&&<ConfirmModal message={confirm.msg} onConfirm={()=>{confirm.cb();setConfirm(null);}} onCancel={()=>setConfirm(null)} confirmLabel="Remove"/>}
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:"1.5rem"}}>
+        <button onClick={onBack} style={{fontWeight:700,fontSize:14,background:BLUE,color:"#fff",border:"none",borderRadius:8,padding:"10px 16px",cursor:"pointer"}}>← Back</button>
+        <h2 style={{margin:0,fontWeight:700,fontSize:22,color:"#fff"}}>👩‍🏫 Teachers</h2>
+      </div>
+
+      {list.length===0
+        ? <p style={{color:"#555",fontWeight:600,fontSize:14,marginBottom:"1.5rem"}}>No teachers added yet. Add one below.</p>
+        : list.map(([id, t])=>(
+          <div key={id} style={{background:CARD,border:"1px solid #2a2a5a",borderRadius:14,padding:"1rem 1.25rem",marginBottom:"0.75rem"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
+              <div>
+                <p style={{margin:0,fontWeight:800,fontSize:16,color:"#fff"}}>{t.name}</p>
+                <p style={{margin:"3px 0 0",fontSize:13,color:"#555",fontWeight:600}}>{t.email}</p>
+              </div>
+              <button onClick={()=>removeTeacher(id)} style={{fontWeight:700,fontSize:12,background:"#2a1a1a",color:"#e05050",border:"1px solid #5a1a1a",borderRadius:7,padding:"5px 12px",cursor:"pointer",flexShrink:0}}>Remove</button>
+            </div>
+            <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+              <span style={{fontSize:13,fontWeight:700,color:"#888",minWidth:28}}>PIN:</span>
+              <span style={{fontSize:16,fontWeight:800,color:showPins[id]?ACCENT:"#333",letterSpacing:"0.2em",minWidth:64,fontFamily:"monospace"}}>
+                {showPins[id] ? (t.pin||"—") : (t.pin ? "••••" : "not set")}
+              </span>
+              <button onClick={()=>setShowPins(s=>({...s,[id]:!s[id]}))}
+                style={{fontSize:12,fontWeight:700,background:"#1a1a3a",color:"#888",border:"1px solid #2a2a5a",borderRadius:6,padding:"4px 10px",cursor:"pointer"}}>
+                {showPins[id]?"Hide":"Show"}
+              </button>
+              <input
+                type="text"
+                placeholder="New PIN"
+                value={editPins[id]||""}
+                onChange={e=>setEditPins(ep=>({...ep,[id]:e.target.value}))}
+                onKeyDown={e=>e.key==="Enter"&&saveEditPin(id)}
+                style={{fontSize:14,padding:"5px 10px",borderRadius:7,border:"1.5px solid #2a2a5a",background:"#0a0a1a",color:"#fff",fontWeight:600,width:100}}/>
+              <button onClick={()=>saveEditPin(id)}
+                style={{fontSize:12,fontWeight:700,background:GREEN,color:"#fff",border:"none",borderRadius:6,padding:"6px 12px",cursor:"pointer"}}>
+                Update
+              </button>
+            </div>
+          </div>
+        ))
+      }
+
+      {/* Add new teacher */}
+      <div style={{background:CARD,border:"2px dashed #2a2a5a",borderRadius:14,padding:"1.25rem",marginTop:"0.5rem"}}>
+        <p style={{margin:"0 0 12px",fontWeight:700,fontSize:15,color:"#888"}}>Add new teacher</p>
+        <input type="text" placeholder="Full name" value={form.name}
+          onChange={e=>setForm(f=>({...f,name:e.target.value}))}
+          style={{width:"100%",fontSize:14,padding:"9px 12px",borderRadius:8,border:"1.5px solid #2a2a5a",background:"#0a0a1a",color:"#fff",fontWeight:600,boxSizing:"border-box",marginBottom:8}}/>
+        <input type="email" placeholder="Email address" value={form.email}
+          onChange={e=>setForm(f=>({...f,email:e.target.value}))}
+          style={{width:"100%",fontSize:14,padding:"9px 12px",borderRadius:8,border:"1.5px solid #2a2a5a",background:"#0a0a1a",color:"#fff",fontWeight:600,boxSizing:"border-box",marginBottom:8}}/>
+        <input type="text" placeholder="PIN (used to access Teacher View from Launch Pad)" value={form.pin}
+          onChange={e=>setForm(f=>({...f,pin:e.target.value}))}
+          onKeyDown={e=>e.key==="Enter"&&addTeacher()}
+          style={{width:"100%",fontSize:14,padding:"9px 12px",borderRadius:8,border:"1.5px solid #2a2a5a",background:"#0a0a1a",color:"#fff",fontWeight:600,boxSizing:"border-box",marginBottom:8}}/>
+        <p style={{margin:"0 0 10px",fontSize:11,color:"#555",lineHeight:1.5}}>
+          💡 Also add this email in Firebase Console → Authentication → Add user, so they can log in directly with email + password.
+        </p>
+        {err&&<p style={{color:"#e05050",fontWeight:700,fontSize:13,margin:"0 0 10px"}}>{err}</p>}
+        <button onClick={addTeacher}
+          style={{width:"100%",padding:"11px",borderRadius:8,border:"none",background:saved?"#0a3a1a":BLUE,color:"#fff",fontWeight:700,fontSize:15,cursor:"pointer"}}>
+          {saved?"Teacher Added ✓":"Add Teacher"}
+        </button>
       </div>
     </div>
   );
@@ -644,98 +786,20 @@ function StudentScreen({name,session,streak,balance,onUpdate,onBack,onSubmit}) {
   );
 }
 
-// ── Add Teacher Modal ─────────────────────────────────────────────────────────
-function AddTeacherModal({onClose}) {
-  const [email,setEmail]=useState("");
-  const [password,setPassword]=useState("");
-  const [displayName,setDisplayName]=useState("");
-  const [sent,setSent]=useState(false);
-  const [err,setErr]=useState("");
-  const [saving,setSaving]=useState(false);
-
-  async function handleCreate() {
-    setErr("");
-    if(!displayName.trim()){ setErr("Please enter a name."); return; }
-    if(!email.trim()||!email.includes("@")){ setErr("Please enter a valid email address."); return; }
-    if(password.length<6){ setErr("Password must be at least 6 characters."); return; }
-    setSaving(true);
-    try {
-      // Store teacher info in Firestore so it shows up in the list
-      const { db } = await import("./firebase");
-      const { doc, setDoc, serverTimestamp } = await import("firebase/firestore");
-      await setDoc(doc(db, "teachers", normalizeId(email)), {
-        displayName: displayName.trim(),
-        email: email.trim(),
-        createdAt: serverTimestamp(),
-      });
-      setSent(true);
-    } catch(e) {
-      setErr("Failed to save teacher. Try again.");
-    }
-    setSaving(false);
-  }
-
-  return (
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:300,padding:"1rem"}}>
-      <div style={{background:CARD,borderRadius:20,padding:"2rem",width:"100%",maxWidth:360,border:"1px solid #2a2a5a",textAlign:"center"}}>
-        <div style={{fontSize:36,marginBottom:8}}>👩‍🏫</div>
-        <h3 style={{margin:"0 0 4px",fontWeight:800,fontSize:20,color:"#fff"}}>Add Teacher</h3>
-        {!sent ? (
-          <>
-            <p style={{margin:"0 0 14px",fontSize:13,color:"#888",fontWeight:600,lineHeight:1.5}}>
-              Create a new teacher account. They can sign in with these credentials immediately.
-            </p>
-            <input type="text" placeholder="Display name" value={displayName}
-              onChange={e=>{setDisplayName(e.target.value);setErr("");}}
-              style={{width:"100%",fontSize:15,padding:"11px 14px",borderRadius:9,border:"1.5px solid #2a2a5a",background:"#0a0a1a",color:"#fff",fontWeight:600,boxSizing:"border-box",marginBottom:8}}/>
-            <input type="email" placeholder="Email" value={email}
-              onChange={e=>{setEmail(e.target.value);setErr("");}}
-              style={{width:"100%",fontSize:15,padding:"11px 14px",borderRadius:9,border:`1.5px solid ${BLUE}55`,background:"#0a0a1a",color:"#fff",fontWeight:600,boxSizing:"border-box",marginBottom:8}}/>
-            <input type="password" placeholder="Temporary password (min 6 chars)" value={password}
-              onChange={e=>{setPassword(e.target.value);setErr("");}}
-              style={{width:"100%",fontSize:15,padding:"11px 14px",borderRadius:9,border:`1.5px solid ${BLUE}55`,background:"#0a0a1a",color:"#fff",fontWeight:600,boxSizing:"border-box",marginBottom:10}}/>
-            <p style={{fontSize:11,color:"#555",margin:"0 0 10px",lineHeight:1.5}}>
-              Note: New teacher accounts must also be created in the Firebase console to enable login. Share the email + password with the teacher.
-            </p>
-            {err&&<p style={{color:"#e05050",fontWeight:700,fontSize:13,margin:"0 0 10px"}}>{err}</p>}
-            <div style={{display:"flex",gap:8}}>
-              <button onClick={onClose} style={{flex:1,padding:"11px",borderRadius:8,border:"1.5px solid #2a2a5a",background:"transparent",fontWeight:700,fontSize:15,cursor:"pointer",color:"#888"}}>Cancel</button>
-              <button onClick={handleCreate} disabled={saving} style={{flex:1,padding:"11px",borderRadius:8,border:"none",background:saving?"#1a3a5a":BLUE,color:"#fff",fontWeight:700,fontSize:15,cursor:saving?"default":"pointer"}}>
-                {saving?"Saving…":"Add Teacher"}
-              </button>
-            </div>
-          </>
-        ) : (
-          <>
-            <div style={{fontSize:48,margin:"8px 0"}}>✅</div>
-            <p style={{color:GREEN,fontWeight:700,fontSize:15,margin:"0 0 6px"}}>Teacher added!</p>
-            <p style={{color:"#888",fontSize:13,fontWeight:600,margin:"0 0 6px",lineHeight:1.5}}>
-              <b style={{color:"#ccc"}}>{displayName}</b> has been saved.<br/>
-              Remember to also add <b style={{color:"#ccc"}}>{email}</b> in the Firebase console so they can log in.
-            </p>
-            <button onClick={onClose} style={{width:"100%",padding:"12px",borderRadius:10,border:"none",background:GREEN,color:"#fff",fontWeight:800,fontSize:16,cursor:"pointer",marginTop:12}}>Done</button>
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-
 // ── Teacher View ──────────────────────────────────────────────────────────────
-function TeacherView({families,sessions,teacherReports,approved,balances,streaks,pins,teacherUser,onApprove,onResetAll,onResetStudent,onFamiliesChange,onBalanceUpdate,onPinsChange,onBack,onTeacherSignOut}) {
+function TeacherView({families,sessions,teacherReports,approved,balances,streaks,pins,teachers,teacherUser,onApprove,onResetAll,onResetStudent,onFamiliesChange,onBalanceUpdate,onPinsChange,onTeachersChange,onBack,onTeacherSignOut}) {
   const [subScreen,setSubScreen]=useState("main");
   const [showSummary,setShowSummary]=useState(false);
-  const [showAddTeacher,setShowAddTeacher]=useState(false);
   const [confirmModal,setConfirmModal]=useState(null);
   function showConfirm(msg,cb){ setConfirmModal({msg,cb}); }
   if(subScreen==="pins") return <ManagePINs families={families} pins={pins} onPinsChange={onPinsChange} onBack={()=>setSubScreen("main")}/>;
   if(subScreen==="xpbank") return <XPBank families={families} balances={balances} onUpdate={onBalanceUpdate} onBack={()=>setSubScreen("main")}/>;
   if(subScreen==="students") return <ManageStudents families={families} onChange={onFamiliesChange} onBack={()=>setSubScreen("main")}/>;
+  if(subScreen==="teachers") return <ManageTeachers teachers={teachers} onTeachersChange={onTeachersChange} onBack={()=>setSubScreen("main")}/>;
   return (
     <div style={{background:BG,minHeight:"100vh",padding:"1.5rem"}}>
       {confirmModal&&<ConfirmModal message={confirmModal.msg} onConfirm={()=>{confirmModal.cb();setConfirmModal(null);}} onCancel={()=>setConfirmModal(null)}/>}
       {showSummary&&<DailySummary reports={teacherReports} families={families} onClose={()=>setShowSummary(false)}/>}
-      {showAddTeacher&&<AddTeacherModal onClose={()=>setShowAddTeacher(false)}/>}
       <div style={{display:"flex",gap:"1.25rem",marginBottom:"1.5rem",alignItems:"flex-start"}}>
         <div style={{flex:1}}>
           <button onClick={onBack} style={{fontWeight:700,fontSize:14,background:"#2a2a5a",color:"#ccc",border:"none",borderRadius:8,padding:"10px 16px",cursor:"pointer"}}>← Launch Pad</button>
@@ -743,8 +807,8 @@ function TeacherView({families,sessions,teacherReports,approved,balances,streaks
           {teacherUser&&<p style={{margin:"4px 0 0",fontSize:12,color:"#555",fontWeight:600}}>{teacherUser.email}</p>}
         </div>
         <div style={{display:"flex",flexDirection:"column",gap:6,minWidth:140}}>
-          <button onClick={()=>setShowAddTeacher(true)} style={{fontWeight:700,fontSize:13,background:"#0a1a2a",color:"#60aaff",border:"1px solid #185FA555",borderRadius:8,padding:"9px 14px",cursor:"pointer",textAlign:"right"}}>👩‍🏫 Add Teacher</button>
-          <button onClick={()=>setSubScreen("pins")} style={{fontWeight:700,fontSize:13,background:"#1a1a3a",color:"#ccc",border:"1px solid #2a2a5a",borderRadius:8,padding:"9px 14px",cursor:"pointer",textAlign:"right"}}>🔑 PINs</button>
+          <button onClick={()=>setSubScreen("teachers")} style={{fontWeight:700,fontSize:13,background:"#0a1a2a",color:"#60aaff",border:"1px solid #185FA555",borderRadius:8,padding:"9px 14px",cursor:"pointer",textAlign:"right"}}>👩‍🏫 Teachers</button>
+          <button onClick={()=>setSubScreen("pins")} style={{fontWeight:700,fontSize:13,background:"#1a1a3a",color:"#ccc",border:"1px solid #2a2a5a",borderRadius:8,padding:"9px 14px",cursor:"pointer",textAlign:"right"}}>🔑 Student PINs</button>
           <button onClick={()=>setSubScreen("xpbank")} style={{fontWeight:700,fontSize:13,background:"#2a1a4a",color:ACCENT,border:`1px solid ${ACCENT}44`,borderRadius:8,padding:"9px 14px",cursor:"pointer",textAlign:"right"}}>⭐ XP Bank</button>
           <button onClick={()=>setSubScreen("students")} style={{fontWeight:700,fontSize:13,background:"#1a1a3a",color:"#ccc",border:"1px solid #2a2a5a",borderRadius:8,padding:"9px 14px",cursor:"pointer",textAlign:"right"}}>👥 Students</button>
           <button onClick={()=>setShowSummary(true)} style={{fontWeight:700,fontSize:13,background:"#0a2a1a",color:GREEN,border:`1px solid ${GREEN}44`,borderRadius:8,padding:"9px 14px",cursor:"pointer",textAlign:"right"}}>📋 Summary</button>
@@ -798,12 +862,15 @@ function TeacherView({families,sessions,teacherReports,approved,balances,streaks
 // ── Main App ──────────────────────────────────────────────────────────────────
 export default function App() {
   const [authReady,setAuthReady]=useState(false);
-  const [teacherUser,setTeacherUser]=useState(null); // Firebase Auth user or null
+  const [teacherUser,setTeacherUser]=useState(null);
   const [studentUnlocked,setStudentUnlocked]=useState(false);
+  const [teacherPinUnlocked,setTeacherPinUnlocked]=useState(false);
+  const [showTeacherPinGate,setShowTeacherPinGate]=useState(false);
   const [screen,setScreen]=useState("launchpad");
   const [activeStudent,setActiveStudent]=useState(null);
   const [families,setFamilies]=useState(null);
   const [pins,setPins]=useState({});
+  const [teachers,setTeachers]=useState({});
   const [sessions,setSessions]=useState({});
   const [teacherReports,setTeacherReports]=useState([]);
   const [approved,setApproved]=useState({});
@@ -812,26 +879,27 @@ export default function App() {
   const [streakPopup,setStreakPopup]=useState(null);
   const [dataLoading,setDataLoading]=useState(true);
 
-  // ── Listen for Firebase Auth state ──────────────────────────────────────────
+  // ── Firebase Auth listener ────────────────────────────────────────────────
   useEffect(()=>{
     const unsub=onAuthStateChanged(auth, user=>{
       setTeacherUser(user||null);
       setAuthReady(true);
-      if(user) setScreen("teacher");
+      if(user){ setScreen("teacher"); setTeacherPinUnlocked(true); }
     });
     return unsub;
   },[]);
 
-  // ── Load data from Firestore ────────────────────────────────────────────────
+  // ── Load data from Firestore ──────────────────────────────────────────────
   useEffect(()=>{
     Promise.all([
       fsGet(PATHS.roster, DEFAULT_FAMILIES),
       fsGet(PATHS.balances, {}),
       fsGet(PATHS.streaks, {}),
       fsGet(PATHS.pins, {}),
+      fsGet("app/teachers", {}),
       fsGet(PATHS.reports(todayKey()), null),
-    ]).then(([fams,bals,stks,pns,reports])=>{
-      setFamilies(fams); setBalances(bals); setStreaks(stks); setPins(pns);
+    ]).then(([fams,bals,stks,pns,tchs,reports])=>{
+      setFamilies(fams); setBalances(bals); setStreaks(stks); setPins(pns); setTeachers(tchs||{});
       if(reports){
         setTeacherReports(reports.list||[]); setApproved(reports.approved||{});
         const rs={};
@@ -845,7 +913,7 @@ export default function App() {
     });
   },[]);
 
-  // ── 3AM expiry ──────────────────────────────────────────────────────────────
+  // ── 3AM reset ────────────────────────────────────────────────────────────
   useEffect(()=>{
     function msUntil3am() {
       const now=new Date();
@@ -858,14 +926,14 @@ export default function App() {
     return ()=>clearTimeout(t);
   },[]);
 
-  // ── Persist to Firestore whenever data changes ───────────────────────────────
+  // ── Persist to Firestore ──────────────────────────────────────────────────
   useEffect(()=>{ if(families!==null) fsSet(PATHS.roster, families); },[families]);
   useEffect(()=>{ fsSet(PATHS.balances, balances); },[balances]);
   useEffect(()=>{ fsSet(PATHS.streaks, streaks); },[streaks]);
   useEffect(()=>{ fsSet(PATHS.pins, pins); },[pins]);
+  useEffect(()=>{ if(Object.keys(teachers).length>0||dataLoading===false) fsSet("app/teachers", teachers); },[teachers]);
 
   function saveReports(list,app){ fsSet(PATHS.reports(todayKey()), {list, approved:app}); }
-
   function getStreak(name){ return (streaks[name]||{count:0}).count; }
   function getSession(name){ return sessions[name]||initSession(); }
 
@@ -914,8 +982,9 @@ export default function App() {
   function handleApprove(i){ const a={...approved,[i]:true}; setApproved(a); saveReports(teacherReports,a); }
 
   async function handleTeacherSignOut(){
-    await signOut(auth);
+    if(teacherUser) await signOut(auth);
     setTeacherUser(null);
+    setTeacherPinUnlocked(false);
     setScreen("launchpad");
   }
 
@@ -924,7 +993,12 @@ export default function App() {
     setScreen("launchpad");
   }
 
-  // ── Loading screens ─────────────────────────────────────────────────────────
+  function handleTeacherAccess(){
+    // Always require PIN from Launch Pad — Firebase auth only unlocks the front door.
+    setShowTeacherPinGate(true);
+  }
+
+  // ── Loading ───────────────────────────────────────────────────────────────
   if(!authReady||dataLoading) return (
     <div style={{background:BG,minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:12}}>
       <div style={{fontSize:48}}>🚀</div>
@@ -932,28 +1006,28 @@ export default function App() {
     </div>
   );
 
-  // ── Teacher is logged in via Firebase Auth ──────────────────────────────────
-  if(teacherUser) return (
+  // ── Teacher View (Firebase auth or PIN unlocked) ───────────────────────────
+  if((teacherUser||teacherPinUnlocked) && screen==="teacher") return (
     <TeacherView
       families={families} sessions={sessions} teacherReports={teacherReports}
       approved={approved} balances={balances} streaks={streaks} pins={pins}
-      teacherUser={teacherUser}
+      teachers={teachers} teacherUser={teacherUser}
       onApprove={handleApprove} onResetAll={handleResetAll} onResetStudent={handleResetStudent}
       onFamiliesChange={f=>setFamilies(f)} onBalanceUpdate={(n,v)=>setBalances(b=>({...b,[n]:v}))}
-      onPinsChange={setPins} onBack={()=>setScreen("launchpad")}
-      onTeacherSignOut={handleTeacherSignOut}/>
+      onPinsChange={setPins} onTeachersChange={setTeachers}
+      onBack={()=>setScreen("launchpad")} onTeacherSignOut={handleTeacherSignOut}/>
   );
 
-  // ── Student not yet unlocked — show gate ────────────────────────────────────
-  if(!studentUnlocked) return (
+  // ── Access Gate (no one logged in yet) ────────────────────────────────────
+  if(!studentUnlocked&&!teacherUser) return (
     <AccessGate
       pins={pins}
       onStudentGranted={()=>setStudentUnlocked(true)}
-      onTeacherGranted={()=>{/* handled by onAuthStateChanged */}}
+      onTeacherGranted={()=>setScreen("teacher")}
     />
   );
 
-  // ── Done screen ─────────────────────────────────────────────────────────────
+  // ── Done screen ───────────────────────────────────────────────────────────
   if(screen.startsWith("done_")){
     const name=screen.replace("done_","");
     const sess=sessions[name]||{};
@@ -978,7 +1052,7 @@ export default function App() {
     );
   }
 
-  // ── Student screen ──────────────────────────────────────────────────────────
+  // ── Student screen ────────────────────────────────────────────────────────
   if(screen==="student"&&activeStudent) return (
     <StudentScreen name={activeStudent} session={getSession(activeStudent)}
       streak={getStreak(activeStudent)} balance={balances[activeStudent]||0}
@@ -987,12 +1061,22 @@ export default function App() {
       onSubmit={f=>handleSubmit(activeStudent,f)}/>
   );
 
-  // ── Launch Pad ──────────────────────────────────────────────────────────────
+  // ── Launch Pad ────────────────────────────────────────────────────────────
+  const isTeacher=!!(teacherUser||teacherPinUnlocked);
   return (
-    <LaunchPad
-      families={families} sessions={sessions} streaks={streaks} balances={balances}
-      onSelectStudent={handleSelectStudent}
-      onTeacherAccess={()=>{ /* teacher logs in via AccessGate tab */ }}
-      onLogout={handleStudentLogout}/>
+    <>
+      {showTeacherPinGate&&(
+        <TeacherPinGate
+          teachers={teachers}
+          onSuccess={()=>{ setTeacherPinUnlocked(true); setShowTeacherPinGate(false); setScreen("teacher"); }}
+          onCancel={()=>setShowTeacherPinGate(false)}/>
+      )}
+      <LaunchPad
+        families={families} sessions={sessions} streaks={streaks} balances={balances}
+        isTeacher={isTeacher}
+        onSelectStudent={handleSelectStudent}
+        onTeacherAccess={handleTeacherAccess}
+        onLogout={isTeacher ? handleTeacherSignOut : handleStudentLogout}/>
+    </>
   );
 }

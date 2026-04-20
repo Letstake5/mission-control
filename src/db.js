@@ -41,4 +41,5 @@ export const PATHS = {
   streaks:  "app/streaks",
   pins:     "app/pins",
   reports:  (dateKey) => `reports/${dateKey}`,
+  sessions: (dateKey) => `sessions/${dateKey}`, 
 };

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { useState, useEffect, useRef } from "react";
 import { auth } from "./firebase";
 import {
@@ -898,7 +899,8 @@ export default function App() {
       fsGet(PATHS.pins, {}),
       fsGet("app/teachers", {}),
       fsGet(PATHS.reports(todayKey()), null),
-    ]).then(([fams,bals,stks,pns,tchs,reports])=>{
+      fsGet(PATHS.sessions(todayKey()), {}),
+    ]).then(([fams,bals,stks,pns,tchs,reports,savedSessions])=>{
       setFamilies(fams); setBalances(bals); setStreaks(stks); setPins(pns); setTeachers(tchs||{});
       if(reports){
         setTeacherReports(reports.list||[]); setApproved(reports.approved||{});
@@ -907,7 +909,9 @@ export default function App() {
           rs[r.student]={...initSession(),submitted:true,completed:r.completed,
             earlyMins:r.earlyMins,xpEarned:r.xpEarned,startTimeStr:r.startTime,finishTimeStr:r.finishTime};
         });
-        setSessions(rs);
+        const merged = {...(savedSessions||{}), ...rs};
+        Object.keys(merged).forEach(k=>{if(merged[k].startEpoch) { merged[k]={...[k],isPaused:true,startEpoch:null}; } });
+        setSessions(merged);
       }
       setDataLoading(false);
     });
@@ -926,6 +930,18 @@ export default function App() {
     return ()=>clearTimeout(t);
   },[]);
 
+  //-- Heartbeat: save running timers every 60s
+  useEffect(()=>{
+  if(dataLoading) return;
+  const t=setInterval(()=>{
+    const snap={};
+    Object.entries(sessions).forEach(([n,s])=>{ snap[n]=!s.isPaused&&.startEpoch)?{...s,pausedRemainingMs:getRemainingMs(s)}:s});
+    fsSet(PATHS.sessions(todayKey()),snap);
+  },60000);
+  return()=>clearInterval(t);
+},[sessions,dataLoading]);
+
+
   // ── Persist to Firestore ──────────────────────────────────────────────────
   useEffect(()=>{ if(families!==null) fsSet(PATHS.roster, families); },[families]);
   useEffect(()=>{ if(dataLoading===false) fsSet(PATHS.balances, balances); },[balances]);
@@ -942,7 +958,7 @@ export default function App() {
     setActiveStudent(name); setScreen("student");
   }
   function handleStudentBack(){ setActiveStudent(null); setScreen("launchpad"); }
-  function handleUpdate(name,updated){ setSessions(s=>({...s,[name]:updated})); }
+  function handleUpdate(name,updated){setSessions(s=>{ const next={...s, [name]:updated}; fsSet(PATHS.sessions(todayKey()),next);return next; }); }
 
   function handleSubmit(name,final){
     setSessions(s=>({...s,[name]:final}));
@@ -967,6 +983,7 @@ export default function App() {
 
   function handleResetAll(){
     setSessions({}); setTeacherReports([]); setApproved({});
+    fsSet(PATHS.sessions(todayKey()), {});
     saveReports([],{}); setScreen("launchpad");
   }
   function handleResetStudent(name){

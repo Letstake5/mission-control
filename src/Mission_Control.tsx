@@ -935,7 +935,7 @@ export default function App() {
   if(dataLoading) return;
   const t=setInterval(()=>{
     const snap={};
-    Object.entries(sessions).forEach(([n,s])=>{ snap[n]=!s.isPaused&&.startEpoch)?{...s,pausedRemainingMs:getRemainingMs(s)}:s});
+    Object.entries(sessions).forEach(([n,s])=>{ snap[n]=(!s.isPaused&&s.startEpoch)?{...s,pausedRemainingMs:getRemainingMs(s)}:s; });
     fsSet(PATHS.sessions(todayKey()),snap);
   },60000);
   return()=>clearInterval(t);

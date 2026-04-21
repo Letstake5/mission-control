@@ -902,17 +902,17 @@ export default function App() {
       fsGet(PATHS.sessions(todayKey()), {}),
     ]).then(([fams,bals,stks,pns,tchs,reports,savedSessions])=>{
       setFamilies(fams); setBalances(bals); setStreaks(stks); setPins(pns); setTeachers(tchs||{});
+      const rs={};
       if(reports){
         setTeacherReports(reports.list||[]); setApproved(reports.approved||{});
-        const rs={};
         (reports.list||[]).forEach(r=>{
           rs[r.student]={...initSession(),submitted:true,completed:r.completed,
             earlyMins:r.earlyMins,xpEarned:r.xpEarned,startTimeStr:r.startTime,finishTimeStr:r.finishTime};
         });
-        const merged = {...(savedSessions||{}), ...rs};
-        Object.keys(merged).forEach(k=>{if(merged[k].startEpoch) { merged[k]={...[k],isPaused:true,startEpoch:null}; } });
-        setSessions(merged);
       }
+      const merged = {...(savedSessions||{}), ...rs};
+      Object.keys(merged).forEach(k=>{if(merged[k].startEpoch) { merged[k]={...[k],isPaused:true,startEpoch:null}; } });
+      setSessions(merged);
       setDataLoading(false);
     });
   },[]);

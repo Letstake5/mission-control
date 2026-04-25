@@ -860,15 +860,15 @@ export default function App() {
   },[]);
 
   // ── Persist to Firestore whenever data changes ───────────────────────────────
-  useEffect(()=>{ if(families!==null) fsSet(PATHS.roster, families); },[families]);
-  useEffect(()=>{ fsSet(PATHS.balances, balances); },[balances]);
-  useEffect(()=>{ fsSet(PATHS.streaks, streaks); },[streaks]);
-  useEffect(()=>{ fsSet(PATHS.pins, pins); },[pins]);
+  useEffect(()=>{ if(!dataLoading && families!==null) fsSet(PATHS.roster, families); },[families,dataLoading]);
+  useEffect(()=>{ if(!dataLoading) fsSet(PATHS.balances, balances); },[balances,dataLoading]);
+  useEffect(()=>{ if(!dataLoading) fsSet(PATHS.streaks, streaks); },[streaks,dataLoading]);
+  useEffect(()=>{ if(!dataLoading) fsSet(PATHS.pins, pins); },[pins,dataLoading]);
 
   function saveReports(list,app){ fsSet(PATHS.reports(todayKey()), {list, approved:app}); }
 
   function getStreak(name){ return (streaks[name]||{count:0}).count; }
-  function getSession(name){ return sessions[name]||initSession(); }
+  function getSession(name){ return {...initSession(),...(sessions[name]||{})}; }
 
   function handleSelectStudent(name){
     setSessions(s=>({...s,[name]:s[name]||initSession()}));
@@ -934,7 +934,7 @@ export default function App() {
   );
 
   // ── Teacher is logged in via Firebase Auth ──────────────────────────────────
-  if(teacherUser) return (
+  if(teacherUser && screen!=="launchpad" && screen!=="student" && !screen.startsWith("done_")) return (
     <TeacherView
       families={families} sessions={sessions} teacherReports={teacherReports}
       approved={approved} balances={balances} streaks={streaks} pins={pins}
@@ -946,7 +946,7 @@ export default function App() {
   );
 
   // ── Student not yet unlocked — show gate ────────────────────────────────────
-  if(!studentUnlocked) return (
+    if(!teacherUser && !studentUnlocked) return (
     <AccessGate
       pins={pins}
       onStudentGranted={()=>setStudentUnlocked(true)}
@@ -993,7 +993,7 @@ export default function App() {
     <LaunchPad
       families={families} sessions={sessions} streaks={streaks} balances={balances}
       onSelectStudent={handleSelectStudent}
-      onTeacherAccess={()=>{ /* teacher logs in via AccessGate tab */ }}
+      onTeacherAccess={()=>{ if(teacherUser) setScreen("teacher"); }}
       onLogout={handleStudentLogout}/>
   );
 }

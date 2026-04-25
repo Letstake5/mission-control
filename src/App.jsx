@@ -860,10 +860,10 @@ export default function App() {
   },[]);
 
   // ── Persist to Firestore whenever data changes ───────────────────────────────
-  useEffect(()=>{ if(families!==null) fsSet(PATHS.roster, families); },[families]);
-  useEffect(()=>{ fsSet(PATHS.balances, balances); },[balances]);
-  useEffect(()=>{ fsSet(PATHS.streaks, streaks); },[streaks]);
-  useEffect(()=>{ fsSet(PATHS.pins, pins); },[pins]);
+  useEffect(()=>{ if(!dataLoading && families!==null) fsSet(PATHS.roster, families); },[families,dataLoading]);
+  useEffect(()=>{ if(!dataLoading) fsSet(PATHS.balances, balances); },[balances,dataLoading]);
+  useEffect(()=>{ if(!dataLoading) fsSet(PATHS.streaks, streaks); },[streaks,dataLoading]);
+  useEffect(()=>{ if(!dataLoading) fsSet(PATHS.pins, pins); },[pins,dataLoading]);
 
   function saveReports(list,app){ fsSet(PATHS.reports(todayKey()), {list, approved:app}); }
 

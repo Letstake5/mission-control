@@ -42,7 +42,7 @@ function fmtDuration(ms) {
 }
 function nowStr() { return new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}); }
 function dateStr() { return new Date().toLocaleDateString([],{weekday:"long",year:"numeric",month:"long",day:"numeric"}); }
-function todayKey() { return new Date().toISOString().slice(0,10); }
+function todayKey() { const d=new Date(); return new Date(d.toLocaleString("en-US",{timeZone:"America/New_York"})).toISOString().slice(0,10);}
 function initSession() {
   return {completed:{},timestamps:{},durations:{},startEpoch:null,pausedRemainingMs:TOTAL_MS,
     isPaused:true,lastSubjectEpoch:null,startTimeStr:null,submitted:false,

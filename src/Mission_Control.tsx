@@ -831,17 +831,21 @@ export default function App() {
       fsGet(PATHS.streaks, {}),
       fsGet(PATHS.pins, {}),
       fsGet(PATHS.reports(todayKey()), null),
-    ]).then(([fams,bals,stks,pns,reports])=>{
+      fsGet(PATHS.sessions(todayKey()), null),
+    ]).then(([fams,bals,stks,pns,reports,liveSessions])=>{
       setFamilies(fams); setBalances(bals); setStreaks(stks); setPins(pns);
+      // Reconstruct submitted-day sessions from reports as a baseline.
+      const rs={};
       if(reports){
         setTeacherReports(reports.list||[]); setApproved(reports.approved||{});
-        const rs={};
         (reports.list||[]).forEach(r=>{
           rs[r.student]={...initSession(),submitted:true,completed:r.completed,
             earlyMins:r.earlyMins,xpEarned:r.xpEarned,startTimeStr:r.startTime,finishTimeStr:r.finishTime};
         });
-        setSessions(rs);
       }
+      // Overlay any live in-progress sessions saved to Firestore.
+      const merged={...rs,...((liveSessions&&liveSessions.list)||{})};
+      setSessions(merged);
       setDataLoading(false);
     });
   },[]);
@@ -864,6 +868,15 @@ export default function App() {
   useEffect(()=>{ if(!dataLoading) fsSet(PATHS.balances, balances); },[balances,dataLoading]);
   useEffect(()=>{ if(!dataLoading) fsSet(PATHS.streaks, streaks); },[streaks,dataLoading]);
   useEffect(()=>{ if(!dataLoading) fsSet(PATHS.pins, pins); },[pins,dataLoading]);
+
+  // ── Auto-save active sessions to Firestore (debounced) ──────────────────────
+  // Saves the sessions object 500ms after the last change. The delay batches
+  // rapid edits so we don't write to Firestore on every keystroke.
+  useEffect(()=>{
+    if(dataLoading) return;
+    const t=setTimeout(()=>fsSet(PATHS.sessions(todayKey()), {list:sessions}), 500);
+    return ()=>clearTimeout(t);
+  },[sessions,dataLoading]);
 
   function saveReports(list,app){ fsSet(PATHS.reports(todayKey()), {list, approved:app}); }
 

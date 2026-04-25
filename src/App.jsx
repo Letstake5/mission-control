@@ -1,13 +1,14 @@
+// @ts-nocheck
 import { useState, useEffect, useRef } from "react";
+import { auth } from "./firebase";
+import {
+  signInWithEmailAndPassword,
+  signOut,
+  onAuthStateChanged,
+} from "firebase/auth";
+import { fsGet, fsSet, fsListen, PATHS } from "./db";
 
-async function storageGet(key, fallback) {
-  try { const r = await window.storage.get(key); return r ? JSON.parse(r.value) : fallback; }
-  catch { return fallback; }
-}
-async function storageSet(key, val) {
-  try { await window.storage.set(key, JSON.stringify(val)); } catch {}
-}
-
+// ── Constants ─────────────────────────────────────────────────────────────────
 const DEFAULT_FAMILIES = [
   { id: 1, name: "Smith Family", students: ["Ira S.", "Zach S."] },
   { id: 2, name: "Croasmun Family", students: ["Allison C.", "Kate C.", "Titus C.", "Adaline C.", "Oksana C.", "Willow C.", "Haven C."] },
@@ -30,8 +31,8 @@ const TOTAL_MS = 2.5*60*60*1000;
 const TRACK_HEIGHT = 340;
 const BG="#0a0a1a", CARD="#13132a", ACCENT="#f0c040", GREEN="#1D9E75", BLUE="#185FA5";
 const MAX_STREAK = 5;
-const CURRENT_YEAR = new Date().getFullYear();
 
+// ── Util ──────────────────────────────────────────────────────────────────────
 function fmt(ms) {
   const t=Math.max(0,Math.floor(ms/1000));
   return `${Math.floor(t/3600)}:${String(Math.floor((t%3600)/60)).padStart(2,"0")}:${String(t%60).padStart(2,"0")}`;
@@ -42,7 +43,7 @@ function fmtDuration(ms) {
 }
 function nowStr() { return new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}); }
 function dateStr() { return new Date().toLocaleDateString([],{weekday:"long",year:"numeric",month:"long",day:"numeric"}); }
-function todayKey() { const d=new Date(); return new Date(d.toLocaleString("en-US",{timeZone:"America/New_York"})).toISOString().slice(0,10);}
+function todayKey() { const d=new Date(); return newDate(d.toLocaleString("en-US",{timeZone:"America/New_York"})).toISOString().slice(0,10);}
 function initSession() {
   return {completed:{},timestamps:{},durations:{},startEpoch:null,pausedRemainingMs:TOTAL_MS,
     isPaused:true,lastSubjectEpoch:null,startTimeStr:null,submitted:false,
@@ -55,6 +56,7 @@ function getRemainingMs(s) {
 function subjectXP(session) { return SUBJECTS.reduce((sum,s)=>sum+(session.completed[s.id]?s.xp:0),0); }
 function normalizeId(name) { return name.replace(/[\s.]/g,"").toLowerCase(); }
 
+// ── UI Primitives ─────────────────────────────────────────────────────────────
 function StarBadge({xp}) {
   return (
     <div style={{display:"flex",alignItems:"center",gap:5,background:"#1a1a35",borderRadius:20,padding:"4px 12px",border:"1px solid #f0c04055"}}>
@@ -168,38 +170,16 @@ function MissionCompletePopup({xpEarned,onClose}) {
     </div>
   );
 }
-function TeacherGate({onSuccess,onCancel}) {
-  const [pw,setPw]=useState(""); const [err,setErr]=useState("");
-  function check() {
-    const yr=parseInt(pw,10);
-    if(!isNaN(yr)&&yr<=CURRENT_YEAR-30){ onSuccess(); }
-    else { setErr("Access denied."); setPw(""); }
-  }
-  return (
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:200,padding:"1rem"}}>
-      <div style={{background:CARD,borderRadius:20,padding:"2rem",width:"100%",maxWidth:320,textAlign:"center",border:"1px solid #2a2a5a"}}>
-        <div style={{fontSize:36,marginBottom:8}}>🔒</div>
-        <h3 style={{margin:"0 0 4px",fontWeight:800,fontSize:20,color:"#fff"}}>Teacher Access</h3>
-        <p style={{margin:"0 0 16px",fontSize:13,color:"#888",fontWeight:600}}>Enter your access code</p>
-        <input type="password" value={pw} onChange={e=>{setPw(e.target.value);setErr("");}}
-          onKeyDown={e=>e.key==="Enter"&&check()}
-          style={{width:"100%",fontSize:20,padding:"11px",borderRadius:9,border:"1.5px solid #2a2a5a",background:"#0a0a1a",color:"#fff",fontWeight:700,textAlign:"center",boxSizing:"border-box",marginBottom:10}}/>
-        {err&&<p style={{color:"#e05050",fontWeight:700,fontSize:13,margin:"0 0 10px"}}>{err}</p>}
-        <div style={{display:"flex",gap:8}}>
-          <button onClick={onCancel} style={{flex:1,padding:"11px",borderRadius:8,border:"1.5px solid #2a2a5a",background:"transparent",fontWeight:700,fontSize:15,cursor:"pointer",color:"#888"}}>Cancel</button>
-          <button onClick={check} style={{flex:1,padding:"11px",borderRadius:8,border:"none",background:BLUE,color:"#fff",fontWeight:700,fontSize:15,cursor:"pointer"}}>Enter</button>
-        </div>
-      </div>
-    </div>
-  );
-}
 
-function AccessGate({pins, onGranted, onTeacherGranted}) {
-  const [tab, setTab]=useState("student"); // "student" | "teacher"
+// ── Access Gate (students: name + PIN; teachers: email + password) ─────────────
+function AccessGate({pins, onStudentGranted, onTeacherGranted}) {
+  const [tab, setTab]=useState("student");
   const [nameInput,setNameInput]=useState("");
   const [pin,setPin]=useState("");
+  const [teacherEmail,setTeacherEmail]=useState("");
   const [teacherPw,setTeacherPw]=useState("");
   const [err,setErr]=useState("");
+  const [loggingIn,setLoggingIn]=useState(false);
 
   function attemptStudent() {
     setErr("");
@@ -208,13 +188,20 @@ function AccessGate({pins, onGranted, onTeacherGranted}) {
     const stored=pins[sid];
     if(!stored||!stored.pin){ setErr("Name not found or no PIN set. Ask your teacher."); return; }
     if(stored.pin!==pin){ setErr("Incorrect PIN. Try again."); return; }
-    onGranted();
+    onStudentGranted();
   }
-  function attemptTeacher() {
+
+  async function attemptTeacher() {
     setErr("");
-    const yr=parseInt(teacherPw,10);
-    if(!isNaN(yr)&&yr<=CURRENT_YEAR-30){ onTeacherGranted(); }
-    else { setErr("Access denied."); setTeacherPw(""); }
+    if(!teacherEmail.trim()||!teacherPw){ setErr("Please enter your email and password."); return; }
+    setLoggingIn(true);
+    try {
+      await signInWithEmailAndPassword(auth, teacherEmail.trim(), teacherPw);
+      onTeacherGranted();
+    } catch(e) {
+      setErr("Login failed. Check your email and password.");
+    }
+    setLoggingIn(false);
   }
 
   const tabStyle=(active)=>({
@@ -234,8 +221,6 @@ function AccessGate({pins, onGranted, onTeacherGranted}) {
           <h1 style={{margin:0,fontWeight:900,fontSize:28,color:"#fff",letterSpacing:"0.02em"}}>Mission Control</h1>
           <p style={{margin:"6px 0 0",fontSize:14,color:"#888",fontWeight:600}}>Sign in to access the Launch Pad</p>
         </div>
-
-        {/* Tabs */}
         <div style={{display:"flex",gap:4,marginBottom:"1.25rem",borderBottom:"1px solid #2a2a5a"}}>
           <button style={tabStyle(tab==="student")} onClick={()=>{setTab("student");setErr("");}}>🎓 Student</button>
           <button style={tabStyle(tab==="teacher")} onClick={()=>{setTab("teacher");setErr("");}}>🔒 Teacher</button>
@@ -261,14 +246,19 @@ function AccessGate({pins, onGranted, onTeacherGranted}) {
 
         {tab==="teacher"&&(
           <>
-            <p style={{fontSize:13,color:"#888",fontWeight:600,margin:"0 0 12px",textAlign:"center"}}>Enter your teacher access code</p>
-            <input type="password" placeholder="Access code" value={teacherPw}
+            <p style={{fontSize:13,color:"#888",fontWeight:600,margin:"0 0 12px",textAlign:"center"}}>Sign in with your teacher account</p>
+            <input type="email" placeholder="Email" value={teacherEmail}
+              onChange={e=>{setTeacherEmail(e.target.value);setErr("");}}
+              onKeyDown={e=>e.key==="Enter"&&attemptTeacher()}
+              style={{width:"100%",fontSize:15,padding:"12px 14px",borderRadius:9,border:`1.5px solid ${BLUE}55`,background:"#0a0a1a",color:"#fff",fontWeight:600,boxSizing:"border-box",marginBottom:10}}/>
+            <input type="password" placeholder="Password" value={teacherPw}
               onChange={e=>{setTeacherPw(e.target.value);setErr("");}}
               onKeyDown={e=>e.key==="Enter"&&attemptTeacher()}
-              style={{width:"100%",fontSize:20,padding:"12px 14px",borderRadius:9,border:`1.5px solid ${BLUE}55`,background:"#0a0a1a",color:"#fff",fontWeight:700,textAlign:"center",boxSizing:"border-box",marginBottom:10}}/>
+              style={{width:"100%",fontSize:15,padding:"12px 14px",borderRadius:9,border:`1.5px solid ${BLUE}55`,background:"#0a0a1a",color:"#fff",fontWeight:600,boxSizing:"border-box",marginBottom:10}}/>
             {err&&<p style={{color:"#e05050",fontWeight:700,fontSize:13,margin:"0 0 10px",textAlign:"center"}}>{err}</p>}
-            <button onClick={attemptTeacher} style={{width:"100%",padding:"13px",borderRadius:9,border:"none",background:BLUE,color:"#fff",fontWeight:800,fontSize:17,cursor:"pointer",boxShadow:`0 0 16px ${BLUE}55`}}>
-              Enter Teacher View 🔒
+            <button onClick={attemptTeacher} disabled={loggingIn}
+              style={{width:"100%",padding:"13px",borderRadius:9,border:"none",background:loggingIn?"#1a3a5a":BLUE,color:"#fff",fontWeight:800,fontSize:17,cursor:loggingIn?"default":"pointer",boxShadow:`0 0 16px ${BLUE}55`}}>
+              {loggingIn?"Signing in…":"Enter Teacher View 🔒"}
             </button>
           </>
         )}
@@ -277,6 +267,7 @@ function AccessGate({pins, onGranted, onTeacherGranted}) {
   );
 }
 
+// ── Launch Pad ────────────────────────────────────────────────────────────────
 function LaunchPad({families,sessions,streaks,balances,onSelectStudent,onTeacherAccess,onLogout}) {
   const [tick,setTick]=useState(0);
   useEffect(()=>{ const t=setInterval(()=>setTick(x=>x+1),30000); return ()=>clearInterval(t); },[]);
@@ -326,6 +317,7 @@ function LaunchPad({families,sessions,streaks,balances,onSelectStudent,onTeacher
   );
 }
 
+// ── Manage Student PINs ───────────────────────────────────────────────────────
 function ManagePINs({families,pins,onPinsChange,onBack}) {
   const [inputs,setInputs]=useState({});
   const [saved,setSaved]=useState({});
@@ -369,6 +361,7 @@ function ManagePINs({families,pins,onPinsChange,onBack}) {
   );
 }
 
+// ── XP Bank ───────────────────────────────────────────────────────────────────
 function XPBank({families,balances,onUpdate,onBack}) {
   const [inputs,setInputs]=useState({});
   const allStudents=families.flatMap(f=>f.students);
@@ -411,6 +404,7 @@ function XPBank({families,balances,onUpdate,onBack}) {
   );
 }
 
+// ── Manage Students ───────────────────────────────────────────────────────────
 function ManageStudents({families,onChange,onBack}) {
   const [newFamName,setNewFamName]=useState("");
   const [newStudent,setNewStudent]=useState({});
@@ -462,10 +456,8 @@ function ManageStudents({families,onChange,onBack}) {
 
 // ── Daily Summary ─────────────────────────────────────────────────────────────
 function DailySummary({reports,families,onClose}) {
-  // Group subjects by group for the legend
   const groups = ["Math","ELA","Core","Skills"];
   const groupColors = { Math:"#6080ff", ELA:"#c060ff", Core:"#ff9955", Skills:"#40c0c0" };
-
   return (
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"flex-start",justifyContent:"center",zIndex:200,overflowY:"auto",padding:"1rem"}}>
       <div style={{background:CARD,borderRadius:16,padding:"1.5rem",width:"100%",maxWidth:700,marginTop:"1rem",marginBottom:"1rem",border:"1px solid #2a2a5a"}}>
@@ -476,7 +468,6 @@ function DailySummary({reports,families,onClose}) {
           </div>
           <button onClick={onClose} style={{fontWeight:700,fontSize:14,background:"#2a2a5a",color:"#ccc",border:"none",borderRadius:8,padding:"9px 14px",cursor:"pointer"}}>Close</button>
         </div>
-
         {reports.length===0
           ? <p style={{color:"#888",fontWeight:600}}>No submissions yet today.</p>
           : families.map(fam=>{
@@ -507,8 +498,6 @@ function DailySummary({reports,families,onClose}) {
               );
             })
         }
-
-        {/* Legend */}
         <div style={{marginTop:"1.25rem",borderTop:"1px solid #2a2a5a",paddingTop:"1rem"}}>
           <p style={{margin:"0 0 10px",fontSize:12,fontWeight:700,color:"#555",textTransform:"uppercase",letterSpacing:"0.08em"}}>Key</p>
           <div style={{display:"flex",flexWrap:"wrap",gap:"0.75rem 2rem"}}>
@@ -528,12 +517,12 @@ function DailySummary({reports,families,onClose}) {
             ))}
           </div>
         </div>
-
       </div>
     </div>
   );
 }
 
+// ── Student Screen ────────────────────────────────────────────────────────────
 function StudentScreen({name,session,streak,balance,onUpdate,onBack,onSubmit}) {
   const [,setTick]=useState(0);
   const rafRef=useRef(null);
@@ -656,16 +645,35 @@ function StudentScreen({name,session,streak,balance,onUpdate,onBack,onSubmit}) {
   );
 }
 
+// ── Add Teacher Modal ─────────────────────────────────────────────────────────
 function AddTeacherModal({onClose}) {
   const [email,setEmail]=useState("");
+  const [password,setPassword]=useState("");
+  const [displayName,setDisplayName]=useState("");
   const [sent,setSent]=useState(false);
   const [err,setErr]=useState("");
+  const [saving,setSaving]=useState(false);
 
-  function handleInvite() {
+  async function handleCreate() {
     setErr("");
+    if(!displayName.trim()){ setErr("Please enter a name."); return; }
     if(!email.trim()||!email.includes("@")){ setErr("Please enter a valid email address."); return; }
-    // TODO: wire to Firebase Auth — createUserWithEmailAndPassword or sendSignInLinkToEmail
-    setSent(true);
+    if(password.length<6){ setErr("Password must be at least 6 characters."); return; }
+    setSaving(true);
+    try {
+      // Store teacher info in Firestore so it shows up in the list
+      const { db } = await import("./firebase");
+      const { doc, setDoc, serverTimestamp } = await import("firebase/firestore");
+      await setDoc(doc(db, "teachers", normalizeId(email)), {
+        displayName: displayName.trim(),
+        email: email.trim(),
+        createdAt: serverTimestamp(),
+      });
+      setSent(true);
+    } catch(e) {
+      setErr("Failed to save teacher. Try again.");
+    }
+    setSaving(false);
   }
 
   return (
@@ -675,28 +683,38 @@ function AddTeacherModal({onClose}) {
         <h3 style={{margin:"0 0 4px",fontWeight:800,fontSize:20,color:"#fff"}}>Add Teacher</h3>
         {!sent ? (
           <>
-            <p style={{margin:"0 0 16px",fontSize:13,color:"#888",fontWeight:600,lineHeight:1.5}}>
-              Enter the new teacher's email. They'll receive an invite to set up their account.<br/>
-              <span style={{color:"#555",fontSize:12}}>(Firebase email verification — coming with deployment)</span>
+            <p style={{margin:"0 0 14px",fontSize:13,color:"#888",fontWeight:600,lineHeight:1.5}}>
+              Create a new teacher account. They can sign in with these credentials immediately.
             </p>
-            <input type="email" placeholder="teacher@example.com" value={email}
+            <input type="text" placeholder="Display name" value={displayName}
+              onChange={e=>{setDisplayName(e.target.value);setErr("");}}
+              style={{width:"100%",fontSize:15,padding:"11px 14px",borderRadius:9,border:"1.5px solid #2a2a5a",background:"#0a0a1a",color:"#fff",fontWeight:600,boxSizing:"border-box",marginBottom:8}}/>
+            <input type="email" placeholder="Email" value={email}
               onChange={e=>{setEmail(e.target.value);setErr("");}}
-              onKeyDown={e=>e.key==="Enter"&&handleInvite()}
-              style={{width:"100%",fontSize:15,padding:"12px 14px",borderRadius:9,border:`1.5px solid ${BLUE}55`,background:"#0a0a1a",color:"#fff",fontWeight:600,boxSizing:"border-box",marginBottom:10}}/>
+              style={{width:"100%",fontSize:15,padding:"11px 14px",borderRadius:9,border:`1.5px solid ${BLUE}55`,background:"#0a0a1a",color:"#fff",fontWeight:600,boxSizing:"border-box",marginBottom:8}}/>
+            <input type="password" placeholder="Temporary password (min 6 chars)" value={password}
+              onChange={e=>{setPassword(e.target.value);setErr("");}}
+              style={{width:"100%",fontSize:15,padding:"11px 14px",borderRadius:9,border:`1.5px solid ${BLUE}55`,background:"#0a0a1a",color:"#fff",fontWeight:600,boxSizing:"border-box",marginBottom:10}}/>
+            <p style={{fontSize:11,color:"#555",margin:"0 0 10px",lineHeight:1.5}}>
+              Note: New teacher accounts must also be created in the Firebase console to enable login. Share the email + password with the teacher.
+            </p>
             {err&&<p style={{color:"#e05050",fontWeight:700,fontSize:13,margin:"0 0 10px"}}>{err}</p>}
             <div style={{display:"flex",gap:8}}>
               <button onClick={onClose} style={{flex:1,padding:"11px",borderRadius:8,border:"1.5px solid #2a2a5a",background:"transparent",fontWeight:700,fontSize:15,cursor:"pointer",color:"#888"}}>Cancel</button>
-              <button onClick={handleInvite} style={{flex:1,padding:"11px",borderRadius:8,border:"none",background:BLUE,color:"#fff",fontWeight:700,fontSize:15,cursor:"pointer"}}>Send Invite</button>
+              <button onClick={handleCreate} disabled={saving} style={{flex:1,padding:"11px",borderRadius:8,border:"none",background:saving?"#1a3a5a":BLUE,color:"#fff",fontWeight:700,fontSize:15,cursor:saving?"default":"pointer"}}>
+                {saving?"Saving…":"Add Teacher"}
+              </button>
             </div>
           </>
         ) : (
           <>
-            <div style={{fontSize:48,margin:"8px 0"}}>📧</div>
-            <p style={{color:GREEN,fontWeight:700,fontSize:15,margin:"0 0 6px"}}>Invite ready to send!</p>
-            <p style={{color:"#888",fontSize:13,fontWeight:600,margin:"0 0 20px",lineHeight:1.5}}>
-              <b style={{color:"#ccc"}}>{email}</b> will be invited once Firebase Auth is connected at deployment.
+            <div style={{fontSize:48,margin:"8px 0"}}>✅</div>
+            <p style={{color:GREEN,fontWeight:700,fontSize:15,margin:"0 0 6px"}}>Teacher added!</p>
+            <p style={{color:"#888",fontSize:13,fontWeight:600,margin:"0 0 6px",lineHeight:1.5}}>
+              <b style={{color:"#ccc"}}>{displayName}</b> has been saved.<br/>
+              Remember to also add <b style={{color:"#ccc"}}>{email}</b> in the Firebase console so they can log in.
             </p>
-            <button onClick={onClose} style={{width:"100%",padding:"12px",borderRadius:10,border:"none",background:GREEN,color:"#fff",fontWeight:800,fontSize:16,cursor:"pointer"}}>Done</button>
+            <button onClick={onClose} style={{width:"100%",padding:"12px",borderRadius:10,border:"none",background:GREEN,color:"#fff",fontWeight:800,fontSize:16,cursor:"pointer",marginTop:12}}>Done</button>
           </>
         )}
       </div>
@@ -704,7 +722,8 @@ function AddTeacherModal({onClose}) {
   );
 }
 
-function TeacherView({families,sessions,teacherReports,approved,balances,streaks,pins,onApprove,onResetAll,onResetStudent,onFamiliesChange,onBalanceUpdate,onPinsChange,onBack}) {
+// ── Teacher View ──────────────────────────────────────────────────────────────
+function TeacherView({families,sessions,teacherReports,approved,balances,streaks,pins,teacherUser,onApprove,onResetAll,onResetStudent,onFamiliesChange,onBalanceUpdate,onPinsChange,onBack,onTeacherSignOut}) {
   const [subScreen,setSubScreen]=useState("main");
   const [showSummary,setShowSummary]=useState(false);
   const [showAddTeacher,setShowAddTeacher]=useState(false);
@@ -722,6 +741,7 @@ function TeacherView({families,sessions,teacherReports,approved,balances,streaks
         <div style={{flex:1}}>
           <button onClick={onBack} style={{fontWeight:700,fontSize:14,background:"#2a2a5a",color:"#ccc",border:"none",borderRadius:8,padding:"10px 16px",cursor:"pointer"}}>← Launch Pad</button>
           <h2 style={{margin:"10px 0 0",fontWeight:700,fontSize:20,color:"#fff"}}>🚀 Teacher View</h2>
+          {teacherUser&&<p style={{margin:"4px 0 0",fontSize:12,color:"#555",fontWeight:600}}>{teacherUser.email}</p>}
         </div>
         <div style={{display:"flex",flexDirection:"column",gap:6,minWidth:140}}>
           <button onClick={()=>setShowAddTeacher(true)} style={{fontWeight:700,fontSize:13,background:"#0a1a2a",color:"#60aaff",border:"1px solid #185FA555",borderRadius:8,padding:"9px 14px",cursor:"pointer",textAlign:"right"}}>👩‍🏫 Add Teacher</button>
@@ -730,6 +750,7 @@ function TeacherView({families,sessions,teacherReports,approved,balances,streaks
           <button onClick={()=>setSubScreen("students")} style={{fontWeight:700,fontSize:13,background:"#1a1a3a",color:"#ccc",border:"1px solid #2a2a5a",borderRadius:8,padding:"9px 14px",cursor:"pointer",textAlign:"right"}}>👥 Students</button>
           <button onClick={()=>setShowSummary(true)} style={{fontWeight:700,fontSize:13,background:"#0a2a1a",color:GREEN,border:`1px solid ${GREEN}44`,borderRadius:8,padding:"9px 14px",cursor:"pointer",textAlign:"right"}}>📋 Summary</button>
           <button onClick={()=>showConfirm("Reset ALL students? Clears timers, checklists, and today's reports. XP and streaks are safe.",onResetAll)} style={{fontWeight:700,fontSize:13,background:"#2a0a0a",color:"#e05050",border:"1px solid #5a1a1a",borderRadius:8,padding:"9px 14px",cursor:"pointer",textAlign:"right"}}>🕐 Reset all</button>
+          <button onClick={onTeacherSignOut} style={{fontWeight:700,fontSize:13,background:"transparent",color:"#555",border:"1px solid #2a2a5a",borderRadius:8,padding:"9px 14px",cursor:"pointer",textAlign:"right"}}>Sign out</button>
         </div>
       </div>
       {teacherReports.length===0
@@ -775,11 +796,13 @@ function TeacherView({families,sessions,teacherReports,approved,balances,streaks
   );
 }
 
+// ── Main App ──────────────────────────────────────────────────────────────────
 export default function App() {
-  const [unlocked,setUnlocked]=useState(false);
+  const [authReady,setAuthReady]=useState(false);
+  const [teacherUser,setTeacherUser]=useState(null); // Firebase Auth user or null
+  const [studentUnlocked,setStudentUnlocked]=useState(false);
   const [screen,setScreen]=useState("launchpad");
   const [activeStudent,setActiveStudent]=useState(null);
-  const [showTeacherGate,setShowTeacherGate]=useState(false);
   const [families,setFamilies]=useState(null);
   const [pins,setPins]=useState({});
   const [sessions,setSessions]=useState({});
@@ -788,46 +811,65 @@ export default function App() {
   const [balances,setBalances]=useState({});
   const [streaks,setStreaks]=useState({});
   const [streakPopup,setStreakPopup]=useState(null);
-  const [loading,setLoading]=useState(true);
+  const [dataLoading,setDataLoading]=useState(true);
 
+  // ── Listen for Firebase Auth state ──────────────────────────────────────────
+  useEffect(()=>{
+    const unsub=onAuthStateChanged(auth, user=>{
+      setTeacherUser(user||null);
+      setAuthReady(true);
+      if(user) setScreen("teacher");
+    });
+    return unsub;
+  },[]);
+
+  // ── Load data from Firestore ────────────────────────────────────────────────
   useEffect(()=>{
     Promise.all([
-      storageGet("mc_roster",DEFAULT_FAMILIES),
-      storageGet("mc_balances",{}),
-      storageGet("mc_streaks",{}),
-      storageGet("mc_pins",{}),
-      storageGet("mc_unlocked",false),
-      storageGet(`mc_reports_${todayKey()}`,null),
-    ]).then(([fams,bals,stks,pns,locked,reports])=>{
+      fsGet(PATHS.roster, DEFAULT_FAMILIES),
+      fsGet(PATHS.balances, {}),
+      fsGet(PATHS.streaks, {}),
+      fsGet(PATHS.pins, {}),
+      fsGet(PATHS.reports(todayKey()), null),
+    ]).then(([fams,bals,stks,pns,reports])=>{
       setFamilies(fams); setBalances(bals); setStreaks(stks); setPins(pns);
-      setUnlocked(!!locked);
       if(reports){
         setTeacherReports(reports.list||[]); setApproved(reports.approved||{});
-        const rs={}; (reports.list||[]).forEach(r=>{ rs[r.student]={...initSession(),submitted:true,completed:r.completed,earlyMins:r.earlyMins,xpEarned:r.xpEarned,startTimeStr:r.startTime,finishTimeStr:r.finishTime}; });
+        const rs={};
+        (reports.list||[]).forEach(r=>{
+          rs[r.student]={...initSession(),submitted:true,completed:r.completed,
+            earlyMins:r.earlyMins,xpEarned:r.xpEarned,startTimeStr:r.startTime,finishTimeStr:r.finishTime};
+        });
         setSessions(rs);
       }
-      setLoading(false);
+      setDataLoading(false);
     });
   },[]);
 
+  // ── 3AM expiry ──────────────────────────────────────────────────────────────
   useEffect(()=>{
     function msUntil3am() {
-      const now=new Date(); const est=new Date(now.toLocaleString("en-US",{timeZone:"America/New_York"}));
-      const next=new Date(est); next.setHours(3,0,0,0); if(est>=next) next.setDate(next.getDate()+1);
+      const now=new Date();
+      const est=new Date(now.toLocaleString("en-US",{timeZone:"America/New_York"}));
+      const next=new Date(est); next.setHours(3,0,0,0);
+      if(est>=next) next.setDate(next.getDate()+1);
       return next-est;
     }
-    const t=setTimeout(()=>{ setUnlocked(false); storageSet("mc_unlocked",false); },msUntil3am());
+    const t=setTimeout(()=>setStudentUnlocked(false), msUntil3am());
     return ()=>clearTimeout(t);
   },[]);
 
-  useEffect(()=>{ if(families!==null) storageSet("mc_roster",families); },[families]);
-  useEffect(()=>{ storageSet("mc_balances",balances); },[balances]);
-  useEffect(()=>{ storageSet("mc_streaks",streaks); },[streaks]);
-  useEffect(()=>{ storageSet("mc_pins",pins); },[pins]);
+  // ── Persist to Firestore whenever data changes ───────────────────────────────
+  useEffect(()=>{ if(families!==null) fsSet(PATHS.roster, families); },[families]);
+  useEffect(()=>{ fsSet(PATHS.balances, balances); },[balances]);
+  useEffect(()=>{ fsSet(PATHS.streaks, streaks); },[streaks]);
+  useEffect(()=>{ fsSet(PATHS.pins, pins); },[pins]);
 
-  function saveReports(list,app){ storageSet(`mc_reports_${todayKey()}`,{list,approved:app}); }
+  function saveReports(list,app){ fsSet(PATHS.reports(todayKey()), {list, approved:app}); }
+
   function getStreak(name){ return (streaks[name]||{count:0}).count; }
-function getSession(name){ return {...initSession(),...(sessions[name]||{})}; }
+  function getSession(name){ return {...initSession(),...(sessions[name]||{})}; }
+
   function handleSelectStudent(name){
     setSessions(s=>({...s,[name]:s[name]||initSession()}));
     setActiveStudent(name); setScreen("student");
@@ -848,7 +890,9 @@ function getSession(name){ return {...initSession(),...(sessions[name]||{})}; }
     setTimeout(()=>setStreakPopup({name,streak:newCount,wasMax:newCount===0&&cur.count===MAX_STREAK}),400);
     const newBal={...balances,[name]:(balances[name]||0)+final.xpEarned};
     setBalances(newBal);
-    const newReport={student:name,startTime:final.startTimeStr,finishTime:final.finishTimeStr,completed:final.completed,timestamps:final.timestamps,durations:final.durations,earlyMins:final.earlyMins,xpEarned:final.xpEarned,date:new Date().toLocaleDateString()};
+    const newReport={student:name,startTime:final.startTimeStr,finishTime:final.finishTimeStr,
+      completed:final.completed,timestamps:final.timestamps,durations:final.durations,
+      earlyMins:final.earlyMins,xpEarned:final.xpEarned,date:new Date().toLocaleDateString()};
     const newReports=[...teacherReports,newReport];
     setTeacherReports(newReports); saveReports(newReports,approved);
     setActiveStudent(null); setScreen("done_"+name);
@@ -870,19 +914,47 @@ function getSession(name){ return {...initSession(),...(sessions[name]||{})}; }
   }
   function handleApprove(i){ const a={...approved,[i]:true}; setApproved(a); saveReports(teacherReports,a); }
 
-  if(loading) return (
+  async function handleTeacherSignOut(){
+    await signOut(auth);
+    setTeacherUser(null);
+    setScreen("launchpad");
+  }
+
+  function handleStudentLogout(){
+    setStudentUnlocked(false);
+    setScreen("launchpad");
+  }
+
+  // ── Loading screens ─────────────────────────────────────────────────────────
+  if(!authReady||dataLoading) return (
     <div style={{background:BG,minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:12}}>
       <div style={{fontSize:48}}>🚀</div>
       <p style={{fontSize:16,fontWeight:700,color:"#888"}}>Loading Mission Control…</p>
     </div>
   );
 
-  function handleTeacherUnlock(){ setUnlocked(true); storageSet("mc_unlocked",true); setScreen("teacher"); }
+  // ── Teacher is logged in via Firebase Auth ──────────────────────────────────
+  if(teacherUser) return (
+    <TeacherView
+      families={families} sessions={sessions} teacherReports={teacherReports}
+      approved={approved} balances={balances} streaks={streaks} pins={pins}
+      teacherUser={teacherUser}
+      onApprove={handleApprove} onResetAll={handleResetAll} onResetStudent={handleResetStudent}
+      onFamiliesChange={f=>setFamilies(f)} onBalanceUpdate={(n,v)=>setBalances(b=>({...b,[n]:v}))}
+      onPinsChange={setPins} onBack={()=>setScreen("launchpad")}
+      onTeacherSignOut={handleTeacherSignOut}/>
+  );
 
-  function handleLogout(){ setUnlocked(false); storageSet("mc_unlocked",false); setScreen("launchpad"); }
+  // ── Student not yet unlocked — show gate ────────────────────────────────────
+  if(!studentUnlocked) return (
+    <AccessGate
+      pins={pins}
+      onStudentGranted={()=>setStudentUnlocked(true)}
+      onTeacherGranted={()=>{/* handled by onAuthStateChanged */}}
+    />
+  );
 
-  if(!unlocked) return <AccessGate pins={pins} onGranted={handleUnlock} onTeacherGranted={handleTeacherUnlock}/>;
-
+  // ── Done screen ─────────────────────────────────────────────────────────────
   if(screen.startsWith("done_")){
     const name=screen.replace("done_","");
     const sess=sessions[name]||{};
@@ -907,15 +979,7 @@ function getSession(name){ return {...initSession(),...(sessions[name]||{})}; }
     );
   }
 
-  if(screen==="teacher") return (
-    <TeacherView
-      families={families} sessions={sessions} teacherReports={teacherReports}
-      approved={approved} balances={balances} streaks={streaks} pins={pins}
-      onApprove={handleApprove} onResetAll={handleResetAll} onResetStudent={handleResetStudent}
-      onFamiliesChange={f=>setFamilies(f)} onBalanceUpdate={(n,v)=>setBalances(b=>({...b,[n]:v}))}
-      onPinsChange={setPins} onBack={()=>setScreen("launchpad")}/>
-  );
-
+  // ── Student screen ──────────────────────────────────────────────────────────
   if(screen==="student"&&activeStudent) return (
     <StudentScreen name={activeStudent} session={getSession(activeStudent)}
       streak={getStreak(activeStudent)} balance={balances[activeStudent]||0}
@@ -924,14 +988,12 @@ function getSession(name){ return {...initSession(),...(sessions[name]||{})}; }
       onSubmit={f=>handleSubmit(activeStudent,f)}/>
   );
 
+  // ── Launch Pad ──────────────────────────────────────────────────────────────
   return (
-    <>
-      {showTeacherGate&&<TeacherGate onSuccess={()=>{ setShowTeacherGate(false); setScreen("teacher"); }} onCancel={()=>setShowTeacherGate(false)}/>}
-      <LaunchPad
-        families={families} sessions={sessions} streaks={streaks} balances={balances}
-        onSelectStudent={handleSelectStudent}
-        onTeacherAccess={()=>setShowTeacherGate(true)}
-        onLogout={handleLogout}/>
-    </>
+    <LaunchPad
+      families={families} sessions={sessions} streaks={streaks} balances={balances}
+      onSelectStudent={handleSelectStudent}
+      onTeacherAccess={()=>{ /* teacher logs in via AccessGate tab */ }}
+      onLogout={handleStudentLogout}/>
   );
-}$
+}

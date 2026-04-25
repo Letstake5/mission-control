@@ -827,9 +827,7 @@ export default function App() {
 
   function saveReports(list,app){ storageSet(`mc_reports_${todayKey()}`,{list,approved:app}); }
   function getStreak(name){ return (streaks[name]||{count:0}).count; }
-  function getSession(name){ return sessions[name]||initSession(); }
-  function handleUnlock(){ setUnlocked(true); storageSet("mc_unlocked",true); }
-
+function getSession(name){ return {...initSession(),...(sessions[name]||{})}; }
   function handleSelectStudent(name){
     setSessions(s=>({...s,[name]:s[name]||initSession()}));
     setActiveStudent(name); setScreen("student");

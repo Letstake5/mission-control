@@ -812,6 +812,9 @@ export default function App() {
   const [streaks,setStreaks]=useState({});
   const [streakPopup,setStreakPopup]=useState(null);
   const [dataLoading,setDataLoading]=useState(true);
+  // Tracks the last sessions JSON we saved or received, so the auto-save and
+  // listener don't echo each other into an infinite loop.
+  const lastSyncedRef=useRef("");
 
   // ── Listen for Firebase Auth state ──────────────────────────────────────────
   useEffect(()=>{
@@ -871,12 +874,33 @@ export default function App() {
 
   // ── Auto-save active sessions to Firestore (debounced) ──────────────────────
   // Saves the sessions object 500ms after the last change. The delay batches
-  // rapid edits so we don't write to Firestore on every keystroke.
+  // rapid edits so we don't write to Firestore on every keystroke. The ref
+  // check prevents echoing back changes that arrived from the listener.
   useEffect(()=>{
     if(dataLoading) return;
-    const t=setTimeout(()=>fsSet(PATHS.sessions(todayKey()), {list:sessions}), 500);
+    if(JSON.stringify(sessions)===lastSyncedRef.current) return;
+    const t=setTimeout(()=>{
+      lastSyncedRef.current=JSON.stringify(sessions);
+      fsSet(PATHS.sessions(todayKey()), {list:sessions});
+    }, 500);
     return ()=>clearTimeout(t);
   },[sessions,dataLoading]);
+
+  // ── Subscribe to remote session updates (cross-device sync) ─────────────────
+  // Listens for changes from other devices and applies them to local state.
+  // The ref check prevents re-saving data we just received as if it were a
+  // new local edit.
+  useEffect(()=>{
+    if(dataLoading) return;
+    const unsub=fsListen(PATHS.sessions(todayKey()), null, data=>{
+      if(!data || !data.list) return;
+      const json=JSON.stringify(data.list);
+      if(json===lastSyncedRef.current) return;
+      lastSyncedRef.current=json;
+      setSessions(data.list);
+    });
+    return unsub;
+  },[dataLoading]);
 
   function saveReports(list,app){ fsSet(PATHS.reports(todayKey()), {list, approved:app}); }
 

@@ -983,7 +983,7 @@ export default function App() {
   );
 
   // ── Student not yet unlocked — show gate ────────────────────────────────────
-    if(!teacherUser && !studentUnlocked) return (
+  if(!teacherUser && !studentUnlocked) return (
     <AccessGate
       pins={pins}
       onStudentGranted={()=>setStudentUnlocked(true)}

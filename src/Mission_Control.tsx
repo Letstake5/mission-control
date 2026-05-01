@@ -937,6 +937,7 @@ export default function App() {
   const [approved,setApproved]=useState({});
   const [balances,setBalances]=useState({});
   const [streaks,setStreaks]=useState({});
+  const [studentSubjects,setStudentSubjects]=useState({});
   const [streakPopup,setStreakPopup]=useState(null);
   const [dataLoading,setDataLoading]=useState(true);
   // Tracks the last sessions JSON we saved or received, so the auto-save and
@@ -962,8 +963,18 @@ export default function App() {
       fsGet(PATHS.pins, {}),
       fsGet(PATHS.reports(todayKey()), null),
       fsGet(PATHS.sessions(todayKey()), null),
-    ]).then(([fams,bals,stks,pns,reports,liveSessions])=>{
+      fsGet(PATHS.studentSubjects, {}),
+    ]).then(([fams,bals,stks,pns,reports,liveSessions,subs])=>{
       setFamilies(fams); setBalances(bals); setStreaks(stks); setPins(pns);
+      // Seed slot assignments: ensure every current student has an entry.
+      // Existing entries are preserved; new students get five empty slots.
+      const allStudents=fams.flatMap(f=>f.students);
+      const seeded={...subs};
+      for(const name of allStudents){
+        if(!seeded[name]) seeded[name]={Math:[],ELA:[],Core:[],AutoNav:[],Skills:[]};
+      }
+      setStudentSubjects(seeded);
+
       // Reconstruct submitted-day sessions from reports as a baseline.
       const rs={};
       if(reports){
@@ -998,6 +1009,26 @@ export default function App() {
   useEffect(()=>{ if(!dataLoading) fsSet(PATHS.balances, balances); },[balances,dataLoading]);
   useEffect(()=>{ if(!dataLoading) fsSet(PATHS.streaks, streaks); },[streaks,dataLoading]);
   useEffect(()=>{ if(!dataLoading) fsSet(PATHS.pins, pins); },[pins,dataLoading]);
+  useEffect(()=>{ if(!dataLoading) fsSet(PATHS.studentSubjects, studentSubjects); },[studentSubjects,dataLoading]);
+  
+  // When a new student is added to families later, make sure they get an
+  // empty slotAssignments entry. Existing entries are preserved.
+  useEffect(()=>{
+    if(dataLoading || !families) return;
+    setStudentSubjects(prev=>{
+      const next={...prev};
+      let changed=false;
+      for(const fam of families){
+        for(const name of fam.students){
+          if(!next[name]){
+            next[name]={Math:[],ELA:[],Core:[],AutoNav:[],Skills:[]};
+            changed=true;
+          }
+        }
+      }
+      return changed?next:prev;
+    });
+  },[families,dataLoading]);
 
   // ── Auto-save active sessions to Firestore (debounced) ──────────────────────
   // Saves the sessions object 500ms after the last change. The delay batches

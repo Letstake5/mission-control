@@ -40,6 +40,7 @@ export const PATHS = {
   balances: "app/balances",
   streaks:  "app/streaks",
   pins:     "app/pins",
+  studentSubjects: "app/student_subjects",
   reports:  (dateKey) => `reports/${dateKey}`,
   sessions: (dateKey) => `sessions/${dateKey}`, 
 };

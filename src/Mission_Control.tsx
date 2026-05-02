@@ -218,7 +218,7 @@ function XPFlash({flashes}) {
     </div>
   );
 }
-function SpaceTrack({progress,doneCount}) {
+function SpaceTrack({progress,doneCount,totalCount}) {
   return (
     <div style={{width:60,position:"relative",height:TRACK_HEIGHT,flexShrink:0}}>
       <svg width="60" height={TRACK_HEIGHT} viewBox={`0 0 60 ${TRACK_HEIGHT}`} style={{position:"absolute",top:0,left:0,pointerEvents:"none"}}>
@@ -233,8 +233,8 @@ function SpaceTrack({progress,doneCount}) {
         <ellipse cx={40} cy={TRACK_HEIGHT-12} rx={4} ry={3} fill="#2a9a5e" opacity={0.8}/>
       </svg>
       <div style={{position:"absolute",top:20,left:"50%",transform:"translateX(-50%)",bottom:40,width:3,background:"#2a2a5a",borderRadius:99}}/>
-      {SUBJECTS.map((_,idx)=>{
-        const pct=(SUBJECTS.length-1-idx)/(SUBJECTS.length-1);
+      {Array.from({length:Math.max(1,totalCount)}).map((_,idx)=>{
+        const pct=totalCount<=1?0:(totalCount-1-idx)/(totalCount-1);
         const topPx=20+pct*(TRACK_HEIGHT-60-20);
         const done=idx<doneCount;
         return <div key={idx} style={{position:"absolute",top:topPx,left:"50%",transform:"translate(-50%,-50%)",width:done?11:6,height:done?11:6,borderRadius:"50%",background:done?GREEN:"#2a2a5a",transition:"all 0.4s",zIndex:2,boxShadow:done?`0 0 6px ${GREEN}`:undefined}}/>;
@@ -395,7 +395,7 @@ function AccessGate({pins, onStudentGranted, onTeacherGranted}) {
 }
 
 // ── Launch Pad ────────────────────────────────────────────────────────────────
-function LaunchPad({families,sessions,streaks,balances,onSelectStudent,onTeacherAccess,onLogout}) {
+function LaunchPad({families,sessions,streaks,balances,studentSubjects,onSelectStudent,onTeacherAccess,onLogout}) {
   const [tick,setTick]=useState(0);
   useEffect(()=>{ const t=setInterval(()=>setTick(x=>x+1),30000); return ()=>clearInterval(t); },[]);
   const totalStudents=families.flatMap(f=>f.students).length;
@@ -422,13 +422,13 @@ function LaunchPad({families,sessions,streaks,balances,onSelectStudent,onTeacher
               const active=sess&&sess.startTimeStr&&!sess.submitted;
               const done=sess&&sess.submitted;
               const streak=(streaks[name]||{count:0}).count;
-              const doneSubjects=SUBJECTS.filter(s=>sess?.completed?.[s.id]).length;
+              const ids=SLOTS.flatMap(s=>(studentSubjects?.[name]?.[s.id])||[]);const totalItems=ids.length;const doneSubjects=ids.filter(id=>sess?.completed?.[id]).length;
               return (
                 <button key={name} onClick={()=>onSelectStudent(name)}
                   style={{padding:"14px 10px",textAlign:"center",fontWeight:700,background:done?"#0a2a1a":active?"#0a1a2a":CARD,color:"#fff",border:done?`2px solid ${GREEN}`:active?`2px solid ${BLUE}`:"2px solid #2a2a5a",borderRadius:12,cursor:"pointer",transition:"all 0.2s",boxShadow:active?`0 0 12px ${BLUE}44`:done?`0 0 12px ${GREEN}44`:undefined}}>
                   <div style={{fontSize:16,fontWeight:800,marginBottom:4}}>{name}</div>
                   {done&&<div style={{fontSize:12,color:GREEN,fontWeight:700}}>✓ Done</div>}
-                  {active&&<div style={{fontSize:12,color:"#60aaff",fontWeight:700}}>🚀 {doneSubjects}/{SUBJECTS.length}</div>}
+                  {active&&<div style={{fontSize:12,color:"#60aaff",fontWeight:700}}>🚀 {doneSubjects}/{totalItems}</div>}
                   {!active&&!done&&<div style={{fontSize:14}}>⭐</div>}
                   {streak>0&&<div style={{fontSize:11,color:"#ff9955",fontWeight:700,marginTop:3}}>🔥 {streak}/{MAX_STREAK}</div>}
                 </button>
@@ -650,7 +650,7 @@ function DailySummary({reports,families,onClose}) {
 }
 
 // ── Student Screen ────────────────────────────────────────────────────────────
-function StudentScreen({name,session,streak,balance,onUpdate,onBack,onSubmit}) {
+function StudentScreen({name,session,streak,balance,slotAssignments,onUpdate,onBack,onSubmit}) {
   const [,setTick]=useState(0);
   const rafRef=useRef(null);
   const [particles,setParticles]=useState([]);
@@ -658,17 +658,30 @@ function StudentScreen({name,session,streak,balance,onUpdate,onBack,onSubmit}) {
   const [showComplete,setShowComplete]=useState(false);
   const [completeFired,setCompleteFired]=useState(false);
 
+  // Build the visible items from this student's slot assignments.
+  // Defensive: skip any IDs that no longer exist in the pantry.
+  const itemById = Object.fromEntries(PANTRY.map(p=>[p.id,p]));
+  const itemsBySlot = {};
+  let visibleItems = [];
+  for (const slot of SLOTS) {
+    const ids = (slotAssignments && slotAssignments[slot.id]) || [];
+    const items = ids.map(id=>itemById[id]).filter(Boolean);
+    itemsBySlot[slot.id] = items;
+    visibleItems = visibleItems.concat(items);
+  }
+  const totalItemCount = visibleItems.length;
+
   useEffect(()=>{
     function loop(){ setTick(t=>t+1); rafRef.current=setTimeout(loop,500); }
     rafRef.current=setTimeout(loop,500); return ()=>clearTimeout(rafRef.current);
   },[]);
 
   const remainingMs=getRemainingMs(session);
-  const doneCount=SUBJECTS.filter(s=>session.completed[s.id]).length;
-  const progress=doneCount/SUBJECTS.length;
+  const doneCount = visibleItems.filter(it=>session.completed[it.id]).length;
+  const progress = totalItemCount>0 ? doneCount/totalItemCount : 0;
   const isRunning=!session.isPaused&&session.startEpoch!=null;
-  const allDone=doneCount===SUBJECTS.length;
-  const sessionXP=subjectXP(session);
+  const allDone = totalItemCount>0 && doneCount===totalItemCount;
+  const sessionXP = visibleItems.reduce((sum,it)=>sum+(session.completed[it.id]?it.xp:0),0);
 
   useEffect(()=>{
     if(allDone&&!completeFired&&session.startTimeStr){ setShowComplete(true); setCompleteFired(true); }
@@ -692,7 +705,8 @@ function StudentScreen({name,session,streak,balance,onUpdate,onBack,onSubmit}) {
     if(session.submitted||session.isPaused) return;
     const now=Date.now();
     const comp={...session.completed},ts={...session.timestamps},dur={...session.durations};
-    const subj=SUBJECTS.find(s=>s.id===id);
+    const subj=itemById[id];
+    if(!subj) return;
     if(comp[id]){ delete comp[id]; delete ts[id]; delete dur[id]; }
     else { comp[id]=true; ts[id]=nowStr(); dur[id]=session.lastSubjectEpoch?now-session.lastSubjectEpoch:0; burst(subj.xp); }
     onUpdate({...session,completed:comp,timestamps:ts,durations:dur,lastSubjectEpoch:now});
@@ -720,53 +734,67 @@ function StudentScreen({name,session,streak,balance,onUpdate,onBack,onSubmit}) {
         <p style={{margin:0,fontSize:12,color:"#555",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.1em"}}>Mission Specialist</p>
         <p style={{margin:"2px 0 0",fontWeight:900,fontSize:26,color:"#fff",letterSpacing:"0.02em"}}>{name}</p>
       </div>
-      <div style={{textAlign:"center",marginBottom:"0.75rem"}}>
-        <p style={{margin:0,fontSize:12,color:"#888",fontWeight:700}}>Time remaining</p>
-        <p style={{margin:0,fontWeight:800,fontSize:30,color:remainingMs<600000?"#e05050":"#fff",letterSpacing:"0.04em"}}>{fmt(remainingMs)}</p>
-      </div>
-      <div style={{display:"flex",gap:"1rem",marginBottom:"1rem",alignItems:"flex-start"}}>
-        <div style={{flex:1}}>
-          <div style={{background:CARD,borderRadius:12,padding:"0.65rem 1rem",marginBottom:"0.75rem",border:"1px solid #2a2a5a"}}>
-            <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}>
-              <span style={{fontSize:13,fontWeight:700,color:"#888"}}>Progress</span>
-              <span style={{fontSize:13,fontWeight:800,color:ACCENT}}>{doneCount}/{SUBJECTS.length} · {sessionXP} XP</span>
-            </div>
-            <div style={{background:"#1a1a3a",borderRadius:99,height:10,overflow:"hidden"}}>
-              <div style={{height:"100%",width:`${progress*100}%`,background:`linear-gradient(90deg,${GREEN},${ACCENT})`,borderRadius:99,transition:"width 0.4s",boxShadow:`0 0 8px ${GREEN}`}}/>
-            </div>
-          </div>
-          <div style={{display:"flex",justifyContent:"center",marginBottom:"0.75rem"}}>
-            <button onClick={isRunning?handlePause:handleLaunch}
-              style={{width:100,height:100,borderRadius:"50%",border:"none",background:isRunning?"#3a0a0a":"#0a2a1a",color:"#fff",fontWeight:700,fontSize:16,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2,boxShadow:isRunning?`0 0 0 3px #e05050,0 0 20px #e0505055`:`0 0 0 3px ${GREEN},0 0 20px ${GREEN}55`}}>
-              <span style={{fontSize:26}}>{isRunning?"⏸":"🚀"}</span>
-              <span style={{fontSize:13}}>{isRunning?"Pause":(session.startTimeStr?"Resume":"Launch")}</span>
-            </button>
-          </div>
-          {!isRunning&&!session.startTimeStr&&<p style={{textAlign:"center",fontSize:13,color:"#888",fontWeight:700,margin:"0 0 8px"}}>Press Launch to start your day!</p>}
-          {!isRunning&&session.startTimeStr&&!session.submitted&&<p style={{textAlign:"center",fontSize:13,color:"#f0a030",fontWeight:700,margin:"0 0 8px"}}>Paused — press Resume to continue.</p>}
+      {totalItemCount === 0 ? (
+        <div style={{background:CARD,borderRadius:14,padding:"2rem 1.25rem",border:"1px solid #2a2a5a",textAlign:"center",marginBottom:"1rem"}}>
+          <div style={{fontSize:48,marginBottom:8}}>📋</div>
+          <p style={{margin:"0 0 4px",fontWeight:800,fontSize:18,color:"#fff"}}>No subjects assigned yet</p>
+          <p style={{margin:0,fontSize:13,color:"#888",fontWeight:600}}>Ask your teacher to set up your daily list.</p>
         </div>
-        <SpaceTrack progress={progress} doneCount={doneCount}/>
-      </div>
-      {["Math","ELA","Core","Skills"].map(group=>(
-        <div key={group} style={{marginBottom:"0.65rem"}}>
-          <p style={{margin:"0 0 5px",fontSize:12,fontWeight:700,color:"#555",textTransform:"uppercase",letterSpacing:"0.08em"}}>{group}</p>
-          {SUBJECTS.filter(s=>s.group===group).map(s=>(
-            <div key={s.id} onClick={()=>handleCheck(s.id)}
-              style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",marginBottom:4,background:session.completed[s.id]?"#0a2a1a":CARD,border:`1px solid ${session.completed[s.id]?"#1D9E7588":"#2a2a5a"}`,borderRadius:10,cursor:(!isRunning||session.submitted)?"default":"pointer",opacity:!isRunning&&!session.completed[s.id]?0.4:1,transition:"all 0.2s",boxShadow:session.completed[s.id]?`0 0 8px ${GREEN}22`:undefined}}>
-              <div style={{width:20,height:20,borderRadius:5,border:`2px solid ${session.completed[s.id]?GREEN:"#2a2a5a"}`,background:session.completed[s.id]?GREEN:"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"all 0.2s"}}>
-                {session.completed[s.id]&&<span style={{color:"#fff",fontSize:13,fontWeight:700,lineHeight:1}}>✓</span>}
+      ) : (
+        <>
+          <div style={{textAlign:"center",marginBottom:"0.75rem"}}>
+            <p style={{margin:0,fontSize:12,color:"#888",fontWeight:700}}>Time remaining</p>
+            <p style={{margin:0,fontWeight:800,fontSize:30,color:remainingMs<600000?"#e05050":"#fff",letterSpacing:"0.04em"}}>{fmt(remainingMs)}</p>
+          </div>
+          <div style={{display:"flex",gap:"1rem",marginBottom:"1rem",alignItems:"flex-start"}}>
+            <div style={{flex:1}}>
+              <div style={{background:CARD,borderRadius:12,padding:"0.65rem 1rem",marginBottom:"0.75rem",border:"1px solid #2a2a5a"}}>
+                <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}>
+                  <span style={{fontSize:13,fontWeight:700,color:"#888"}}>Progress</span>
+                  <span style={{fontSize:13,fontWeight:800,color:ACCENT}}>{doneCount}/{totalItemCount} · {sessionXP} XP</span>
+                </div>
+                <div style={{background:"#1a1a3a",borderRadius:99,height:10,overflow:"hidden"}}>
+                  <div style={{height:"100%",width:`${progress*100}%`,background:`linear-gradient(90deg,${GREEN},${ACCENT})`,borderRadius:99,transition:"width 0.4s",boxShadow:`0 0 8px ${GREEN}`}}/>
+                </div>
               </div>
-              <span style={{flex:1,fontSize:15,fontWeight:600,color:session.completed[s.id]?GREEN:"#ccc",textDecoration:session.completed[s.id]?"line-through":"none"}}>{s.label}</span>
-              <span style={{fontSize:12,fontWeight:700,color:ACCENT,opacity:0.7}}>+{s.xp}</span>
-              {session.timestamps[s.id]&&<span style={{fontSize:11,fontWeight:600,color:"#555"}}>{session.timestamps[s.id]}</span>}
+              <div style={{display:"flex",justifyContent:"center",marginBottom:"0.75rem"}}>
+                <button onClick={isRunning?handlePause:handleLaunch}
+                  style={{width:100,height:100,borderRadius:"50%",border:"none",background:isRunning?"#3a0a0a":"#0a2a1a",color:"#fff",fontWeight:700,fontSize:16,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2,boxShadow:isRunning?`0 0 0 3px #e05050,0 0 20px #e0505055`:`0 0 0 3px ${GREEN},0 0 20px ${GREEN}55`}}>
+                  <span style={{fontSize:26}}>{isRunning?"⏸":"🚀"}</span>
+                  <span style={{fontSize:13}}>{isRunning?"Pause":(session.startTimeStr?"Resume":"Launch")}</span>
+                </button>
+              </div>
+              {!isRunning&&!session.startTimeStr&&<p style={{textAlign:"center",fontSize:13,color:"#888",fontWeight:700,margin:"0 0 8px"}}>Press Launch to start your day!</p>}
+              {!isRunning&&session.startTimeStr&&!session.submitted&&<p style={{textAlign:"center",fontSize:13,color:"#f0a030",fontWeight:700,margin:"0 0 8px"}}>Paused — press Resume to continue.</p>}
             </div>
-          ))}
-        </div>
-      ))}
-      {session.startTimeStr&&!session.submitted&&(
-        <button onClick={handleSubmit} style={{width:"100%",marginTop:8,fontWeight:700,fontSize:16,background:allDone?GREEN:BLUE,color:"#fff",border:"none",borderRadius:10,padding:"13px",cursor:"pointer",boxShadow:allDone?`0 0 16px ${GREEN}88`:undefined}}>
-          {allDone?"🚀 Submit for teacher approval":`Submit now (${SUBJECTS.length-doneCount} remaining)`}
-        </button>
+            <SpaceTrack progress={progress} doneCount={doneCount} totalCount={totalItemCount}/>
+          </div>
+          {SLOTS.map(slot=>{
+            const items = itemsBySlot[slot.id];
+            if(items.length===0) return null;
+            return (
+              <div key={slot.id} style={{marginBottom:"0.65rem"}}>
+                <p style={{margin:"0 0 5px",fontSize:12,fontWeight:700,color:"#555",textTransform:"uppercase",letterSpacing:"0.08em"}}>{slot.label}</p>
+                {items.map(s=>(
+                  <div key={s.id} onClick={()=>handleCheck(s.id)}
+                    style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",marginBottom:4,background:session.completed[s.id]?"#0a2a1a":CARD,border:`1px solid ${session.completed[s.id]?"#1D9E7588":"#2a2a5a"}`,borderRadius:10,cursor:(!isRunning||session.submitted)?"default":"pointer",opacity:!isRunning&&!session.completed[s.id]?0.4:1,transition:"all 0.2s",boxShadow:session.completed[s.id]?`0 0 8px ${GREEN}22`:undefined}}>
+                    <div style={{width:20,height:20,borderRadius:5,border:`2px solid ${session.completed[s.id]?GREEN:"#2a2a5a"}`,background:session.completed[s.id]?GREEN:"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"all 0.2s"}}>
+                      {session.completed[s.id]&&<span style={{color:"#fff",fontSize:13,fontWeight:700,lineHeight:1}}>✓</span>}
+                    </div>
+                    <span style={{flex:1,fontSize:15,fontWeight:600,color:session.completed[s.id]?GREEN:"#ccc",textDecoration:session.completed[s.id]?"line-through":"none"}}>{s.label}</span>
+                    <span style={{fontSize:12,fontWeight:700,color:ACCENT,opacity:0.7}}>+{s.xp}</span>
+                    {session.timestamps[s.id]&&<span style={{fontSize:11,fontWeight:600,color:"#555"}}>{session.timestamps[s.id]}</span>}
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+          {session.startTimeStr&&!session.submitted&&(
+            <button onClick={handleSubmit} style={{width:"100%",marginTop:8,fontWeight:700,fontSize:16,background:allDone?GREEN:BLUE,color:"#fff",border:"none",borderRadius:10,padding:"13px",cursor:"pointer",boxShadow:allDone?`0 0 16px ${GREEN}88`:undefined}}>
+              {allDone?"🚀 Submit for teacher approval":`Submit now (${totalItemCount-doneCount} remaining)`}
+            </button>
+          )}
+        </>
       )}
     </div>
   );
@@ -1305,12 +1333,12 @@ export default function App() {
 
   function handleSubmit(name,final){
     setSessions(s=>({...s,[name]:final}));
-    const allDone=SUBJECTS.every(s=>final.completed[s.id]);
+    const requiredIds=SLOTS.filter(slot=>slot.requiredForStreak).flatMap(slot=>(studentSubjects?.[name]?.[slot.id])||[]);const allDone=requiredIds.length>0 && requiredIds.every(id=>final.completed[id]);
     const newStreaks={...streaks};
     const cur=newStreaks[name]||{count:0};
     let newCount=cur.count;
     if(allDone){ newCount=cur.count+1; if(newCount>MAX_STREAK) newCount=0; }
-    else if(final.launched){ newCount=0; }
+    else if(final.launched && requiredIds.length>0){ newCount=0; }
     newStreaks[name]={count:newCount,lastCompleted:Date.now()};
     setStreaks(newStreaks);
     setTimeout(()=>setStreakPopup({name,streak:newCount,wasMax:newCount===0&&cur.count===MAX_STREAK}),400);
@@ -1409,7 +1437,7 @@ export default function App() {
   // ── Student screen ──────────────────────────────────────────────────────────
   if(screen==="student"&&activeStudent) return (
     <StudentScreen name={activeStudent} session={getSession(activeStudent)}
-      streak={getStreak(activeStudent)} balance={balances[activeStudent]||0}
+      streak={getStreak(activeStudent)} balance={balances[activeStudent]||0} slotAssignments={studentSubjects[activeStudent]}
       onUpdate={u=>handleUpdate(activeStudent,u)}
       onBack={handleStudentBack}
       onSubmit={f=>handleSubmit(activeStudent,f)}/>
@@ -1418,7 +1446,7 @@ export default function App() {
   // ── Launch Pad ──────────────────────────────────────────────────────────────
   return (
     <LaunchPad
-      families={families} sessions={sessions} streaks={streaks} balances={balances}
+      families={families} sessions={sessions} streaks={streaks} balances={balances} studentSubjects={studentSubjects} studentSubjects={studentSubjects} studentSubjects={studentSubjects} studentSubjects={studentSubjects}
       onSelectStudent={handleSelectStudent}
       onTeacherAccess={()=>{ if(teacherUser) setScreen("teacher"); }}
       onLogout={handleStudentLogout}/>

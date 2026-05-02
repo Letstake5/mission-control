@@ -849,8 +849,237 @@ function AddTeacherModal({onClose}) {
   );
 }
 
+// ── Subjects Edit Modal — used by ManageSubjects below ────────────────────────
+// Five slot sections per student. Chips for assigned items, removable via ×.
+// "+ Add subject" opens an in-modal pantry picker grouped by defaultGroup.
+// Items already in another slot for this student are greyed out.
+// Saves are continuous — every change calls onChange(newAssignments).
+function SubjectsEditModal({ studentName, assignments, onChange, onClose }) {
+  const [pickerSlot, setPickerSlot] = useState(null);
+  const [pickerSearch, setPickerSearch] = useState("");
+  const itemById = Object.fromEntries(PANTRY.map(p => [p.id, p]));
+  const slotById = Object.fromEntries(SLOTS.map(s => [s.id, s]));
+
+  function getSlotForItem(itemId) {
+    for (const slot of SLOTS) {
+      if ((assignments[slot.id] || []).includes(itemId)) return slot.id;
+    }
+    return null;
+  }
+  function removeFromSlot(slotId, itemId) {
+    onChange({ ...assignments, [slotId]: (assignments[slotId] || []).filter(id => id !== itemId) });
+  }
+  function togglePickerItem(itemId) {
+    if (!pickerSlot) return;
+    const list = assignments[pickerSlot] || [];
+    if (list.includes(itemId)) onChange({ ...assignments, [pickerSlot]: list.filter(id => id !== itemId) });
+    else onChange({ ...assignments, [pickerSlot]: [...list, itemId] });
+  }
+
+  function renderPicker() {
+    if (!pickerSlot) return null;
+    const term = pickerSearch.toLowerCase().trim();
+    const groupOrder = ["Math", "ELA", "Core", "AutoNav", "Skills"];
+    const grouped = groupOrder.map(gid => ({
+      gid,
+      items: PANTRY.filter(p => p.defaultGroup === gid && (!term || p.label.toLowerCase().includes(term))),
+    })).filter(g => g.items.length > 0);
+    return (
+      <div onClick={(e) => { if (e.target === e.currentTarget) setPickerSlot(null); }}
+        style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.7)", display:"flex", alignItems:"center", justifyContent:"center", padding:"1rem", zIndex:400 }}>
+        <div style={{ background:CARD, borderRadius:14, border:"1px solid #2a2a5a", width:"100%", maxWidth:500, maxHeight:"85vh", display:"flex", flexDirection:"column", boxShadow:"0 20px 60px rgba(0,0,0,0.5)" }}>
+          <div style={{ padding:"14px 18px", borderBottom:"1px solid #2a2a5a", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+            <div>
+              <h3 style={{ margin:0, fontSize:15, fontWeight:800, color:"#fff" }}>Add to {slotById[pickerSlot].label}</h3>
+              <small style={{ color:"#888", fontWeight:600, fontSize:11, display:"block", marginTop:2 }}>Tap to add. Tap again to remove. Greyed = already in another slot.</small>
+            </div>
+            <button onClick={() => setPickerSlot(null)} style={{ background:"transparent", border:"1px solid #2a2a5a", color:"#888", padding:"6px 12px", borderRadius:7, fontSize:12, fontWeight:700, cursor:"pointer" }}>Close</button>
+          </div>
+          <div style={{ padding:"12px 18px", borderBottom:"1px solid #2a2a5a" }}>
+            <input type="text" placeholder="Search pantry…" value={pickerSearch} onChange={e => setPickerSearch(e.target.value)} autoFocus
+              style={{ width:"100%", background:BG, color:"#fff", border:"1px solid #2a2a5a", borderRadius:8, padding:"9px 12px", fontSize:14, fontWeight:600, boxSizing:"border-box", fontFamily:"inherit" }}/>
+          </div>
+          <div style={{ overflowY:"auto", padding:"4px 18px 16px", flex:1 }}>
+            {grouped.length === 0 ? (
+              <p style={{ color:"#555", fontSize:13, textAlign:"center", padding:"32px 0", fontWeight:600 }}>No subjects match your search.</p>
+            ) : grouped.map(g => (
+              <div key={g.gid} style={{ marginTop:12 }}>
+                <p style={{ fontSize:10, fontWeight:800, color:"#666", textTransform:"uppercase", letterSpacing:"0.1em", margin:"6px 0 8px" }}>{slotById[g.gid].label}</p>
+                <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+                  {g.items.map(it => {
+                    const slotOfItem = getSlotForItem(it.id);
+                    const inThisSlot = slotOfItem === pickerSlot;
+                    const inOtherSlot = slotOfItem && !inThisSlot;
+                    const base = { display:"inline-flex", alignItems:"center", gap:6, borderRadius:16, padding:"5px 11px", fontSize:12, fontWeight:600, border:"1px solid", fontFamily:"inherit" };
+                    const style = inThisSlot
+                      ? { ...base, background:"rgba(29,158,117,0.12)", borderColor:GREEN, color:GREEN, cursor:"pointer" }
+                      : inOtherSlot
+                      ? { ...base, background:BG, borderColor:"#1a1a3a", color:"#666", opacity:0.35, cursor:"not-allowed" }
+                      : { ...base, background:"#1a1a3a", borderColor:"#2a2a5a", color:"#ddd", cursor:"pointer" };
+                    return (
+                      <button key={it.id} disabled={inOtherSlot} onClick={() => !inOtherSlot && togglePickerItem(it.id)} style={style}>
+                        {inThisSlot && <span style={{ color:GREEN, fontWeight:800 }}>✓ </span>}
+                        {it.label}
+                        <span style={{ color: inOtherSlot ? "#444" : inThisSlot ? GREEN : ACCENT, fontSize:10, fontWeight:800, marginLeft:2 }}>+{it.xp}</span>
+                        {inOtherSlot && <span style={{ fontSize:9, fontWeight:700, color:"#555", marginLeft:4, fontStyle:"italic" }}>in {slotById[slotOfItem].label}</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.6)", display:"flex", alignItems:"flex-start", justifyContent:"center", padding:"1rem", overflowY:"auto", zIndex:300 }}>
+      <div style={{ background:CARD, borderRadius:16, border:"1px solid #2a2a5a", width:"100%", maxWidth:560, marginTop:"1rem", marginBottom:"1rem" }}>
+        <div style={{ padding:"16px 20px", borderBottom:"1px solid #2a2a5a", display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:12 }}>
+          <div>
+            <h2 style={{ margin:0, fontSize:18, fontWeight:800, color:"#fff" }}>Edit Subjects</h2>
+            <p style={{ margin:"3px 0 0", fontSize:12, color:"#888", fontWeight:600 }}>
+              <strong style={{ color:"#fff", fontWeight:700 }}>{studentName}</strong>
+            </p>
+          </div>
+          <button onClick={onClose} style={{ background:"transparent", border:"1px solid #2a2a5a", color:"#888", padding:"6px 12px", borderRadius:7, fontSize:12, fontWeight:700, cursor:"pointer", flexShrink:0 }}>Close</button>
+        </div>
+        <div style={{ padding:"16px 20px 8px" }}>
+          {SLOTS.map(slot => {
+            const items = assignments[slot.id] || [];
+            const count = items.length;
+            const highlighted = count >= 5;
+            return (
+              <div key={slot.id} style={{ marginBottom:16, paddingBottom:14, borderBottom:"1px solid #1a1a3a" }}>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8, gap:10, flexWrap:"wrap" }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                    <span style={{ fontSize:12, fontWeight:800, color:"#ccc", textTransform:"uppercase", letterSpacing:"0.08em" }}>{slot.label}</span>
+                    <span style={{ fontSize:9, fontWeight:800, padding:"3px 7px", borderRadius:10, textTransform:"uppercase", letterSpacing:"0.05em", border:"1px solid", background:slot.requiredForStreak?"rgba(255,107,53,0.08)":"rgba(29,158,117,0.08)", color:slot.requiredForStreak?"#ff9955":GREEN, borderColor:slot.requiredForStreak?"rgba(255,107,53,0.3)":"rgba(29,158,117,0.3)" }}>
+                      {slot.requiredForStreak ? "Streak" : "XP only"}
+                    </span>
+                  </div>
+                  <span style={{ fontSize:11, fontWeight:700, color: highlighted ? ACCENT : "#555", textShadow: highlighted ? "0 0 6px rgba(240,192,64,0.4)" : undefined }}>
+                    {count} item{count === 1 ? "" : "s"}{highlighted ? " · full slot" : ""}
+                  </span>
+                </div>
+                <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:8, minHeight:30 }}>
+                  {items.length === 0 ? (
+                    <span style={{ fontSize:12, color:"#444", fontStyle:"italic", padding:"6px 0 4px" }}>No subjects assigned yet.</span>
+                  ) : (
+                    items.map(itemId => {
+                      const it = itemById[itemId];
+                      if (!it) return null;
+                      return (
+                        <span key={itemId} style={{ display:"inline-flex", alignItems:"center", gap:6, background:"#1a1a3a", border:"1px solid #2a2a5a", borderRadius:16, padding:"4px 4px 4px 10px", fontSize:12, fontWeight:600, color:"#ddd" }}>
+                          {it.label}
+                          <span style={{ color:ACCENT, fontWeight:800, fontSize:10 }}>+{it.xp}</span>
+                          <button onClick={() => removeFromSlot(slot.id, itemId)} style={{ background:"transparent", border:"none", color:"#888", fontWeight:700, fontSize:18, lineHeight:1, cursor:"pointer", padding:"0 6px" }}>×</button>
+                        </span>
+                      );
+                    })
+                  )}
+                </div>
+                <button onClick={() => { setPickerSlot(slot.id); setPickerSearch(""); }}
+                  style={{ background:"transparent", border:"1px dashed #3a3a6a", color:"#888", borderRadius:16, padding:"5px 14px", fontSize:12, fontWeight:700, cursor:"pointer" }}>+ Add subject</button>
+              </div>
+            );
+          })}
+        </div>
+        <div style={{ padding:"14px 20px", borderTop:"1px solid #2a2a5a", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+          <span style={{ fontSize:11, color:GREEN, fontWeight:700, display:"flex", alignItems:"center", gap:5 }}>
+            <span style={{ width:6, height:6, borderRadius:"50%", background:GREEN, boxShadow:`0 0 4px ${GREEN}` }}/>
+            Auto-saves on each change
+          </span>
+          <button onClick={onClose} style={{ background:BLUE, color:"#fff", border:"none", borderRadius:8, padding:"9px 22px", fontSize:14, fontWeight:800, cursor:"pointer" }}>Done</button>
+        </div>
+      </div>
+      {renderPicker()}
+    </div>
+  );
+}
+
+// ── Manage Subjects — teacher list of students with their slot assignments ────
+// Lists every student grouped by family. Each card shows assigned subjects
+// grouped by slot, plus an Edit button that opens SubjectsEditModal.
+function ManageSubjects({ families, studentSubjects, onSubjectsChange, onBack }) {
+  const [editingStudent, setEditingStudent] = useState(null);
+  const itemById = Object.fromEntries(PANTRY.map(p => [p.id, p]));
+
+  function updateStudent(name, newAssignments) {
+    onSubjectsChange({ ...studentSubjects, [name]: newAssignments });
+  }
+
+  return (
+    <div style={{ background:BG, minHeight:"100vh", padding:"1.5rem" }}>
+      {editingStudent && (
+        <SubjectsEditModal
+          studentName={editingStudent}
+          assignments={studentSubjects[editingStudent] || { Math:[], ELA:[], Core:[], AutoNav:[], Skills:[] }}
+          onChange={(newAssignments) => updateStudent(editingStudent, newAssignments)}
+          onClose={() => setEditingStudent(null)}
+        />
+      )}
+      <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:"1.5rem" }}>
+        <button onClick={onBack} style={{ fontWeight:700, fontSize:14, background:BLUE, color:"#fff", border:"none", borderRadius:8, padding:"10px 16px", cursor:"pointer" }}>← Back</button>
+        <h2 style={{ margin:0, fontWeight:700, fontSize:22, color:"#fff" }}>📚 Subjects</h2>
+      </div>
+      {families.map(fam => (
+        <div key={fam.id} style={{ marginBottom:"1.5rem" }}>
+          <p style={{ margin:"0 0 10px", fontSize:13, fontWeight:700, color:"#555", textTransform:"uppercase", letterSpacing:"0.08em" }}>{fam.name}</p>
+          {fam.students.map(name => {
+            const assignments = studentSubjects[name] || { Math:[], ELA:[], Core:[], AutoNav:[], Skills:[] };
+            const totalCount = SLOTS.reduce((sum, s) => sum + (assignments[s.id] || []).length, 0);
+            const slotsUsed = SLOTS.filter(s => (assignments[s.id] || []).length > 0).length;
+            return (
+              <div key={name} style={{ background:CARD, border:"1px solid #2a2a5a", borderRadius:14, padding:"1rem 1.25rem", marginBottom:"0.75rem" }}>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom: totalCount>0 ? "0.75rem" : 0, gap:10, flexWrap:"wrap" }}>
+                  <div>
+                    <span style={{ fontWeight:700, fontSize:17, color:"#fff" }}>{name}</span>
+                    <span style={{ fontSize:12, color:"#555", fontWeight:600, marginLeft:10 }}>
+                      {totalCount === 0
+                        ? "No subjects assigned"
+                        : `${totalCount} subject${totalCount === 1 ? "" : "s"} across ${slotsUsed} slot${slotsUsed === 1 ? "" : "s"}`}
+                    </span>
+                  </div>
+                  <button onClick={() => setEditingStudent(name)} style={{ fontWeight:700, fontSize:13, background:BLUE, color:"#fff", border:"none", borderRadius:8, padding:"7px 16px", cursor:"pointer" }}>Edit</button>
+                </div>
+                {totalCount > 0 && (
+                  <div>
+                    {SLOTS.map(slot => {
+                      const items = assignments[slot.id] || [];
+                      if (items.length === 0) return null;
+                      return (
+                        <div key={slot.id} style={{ marginBottom:6, display:"flex", alignItems:"flex-start", gap:8, flexWrap:"wrap" }}>
+                          <span style={{ fontSize:10, fontWeight:800, color:"#666", textTransform:"uppercase", letterSpacing:"0.08em", paddingTop:4, minWidth:60 }}>{slot.label}</span>
+                          <div style={{ display:"flex", flexWrap:"wrap", gap:4, flex:1 }}>
+                            {items.map(itemId => {
+                              const it = itemById[itemId];
+                              if (!it) return null;
+                              return (
+                                <span key={itemId} style={{ display:"inline-block", background:"#1a1a3a", border:"1px solid #2a2a5a", borderRadius:12, padding:"2px 9px", fontSize:11, fontWeight:600, color:"#ccc" }}>
+                                  {it.label}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ── Teacher View ──────────────────────────────────────────────────────────────
-function TeacherView({families,sessions,teacherReports,approved,balances,streaks,pins,teacherUser,onApprove,onResetAll,onResetStudent,onFamiliesChange,onBalanceUpdate,onPinsChange,onBack,onTeacherSignOut}) {
+function TeacherView({families,sessions,teacherReports,approved,balances,streaks,pins,teacherUser,onApprove,onResetAll,onResetStudent,onFamiliesChange,onBalanceUpdate,onPinsChange,onBack,onTeacherSignOut,studentSubjects,onSubjectsChange}) {
   const [subScreen,setSubScreen]=useState("main");
   const [showSummary,setShowSummary]=useState(false);
   const [showAddTeacher,setShowAddTeacher]=useState(false);
@@ -859,6 +1088,7 @@ function TeacherView({families,sessions,teacherReports,approved,balances,streaks
   if(subScreen==="pins") return <ManagePINs families={families} pins={pins} onPinsChange={onPinsChange} onBack={()=>setSubScreen("main")}/>;
   if(subScreen==="xpbank") return <XPBank families={families} balances={balances} onUpdate={onBalanceUpdate} onBack={()=>setSubScreen("main")}/>;
   if(subScreen==="students") return <ManageStudents families={families} onChange={onFamiliesChange} onBack={()=>setSubScreen("main")}/>;
+  if(subScreen==="subjects") return <ManageSubjects families={families} studentSubjects={studentSubjects} onSubjectsChange={onSubjectsChange} onBack={()=>setSubScreen("main")}/>;
   return (
     <div style={{background:BG,minHeight:"100vh",padding:"1.5rem"}}>
       {confirmModal&&<ConfirmModal message={confirmModal.msg} onConfirm={()=>{confirmModal.cb();setConfirmModal(null);}} onCancel={()=>setConfirmModal(null)}/>}
@@ -875,6 +1105,7 @@ function TeacherView({families,sessions,teacherReports,approved,balances,streaks
           <button onClick={()=>setSubScreen("pins")} style={{fontWeight:700,fontSize:13,background:"#1a1a3a",color:"#ccc",border:"1px solid #2a2a5a",borderRadius:8,padding:"9px 14px",cursor:"pointer",textAlign:"right"}}>🔑 PINs</button>
           <button onClick={()=>setSubScreen("xpbank")} style={{fontWeight:700,fontSize:13,background:"#2a1a4a",color:ACCENT,border:`1px solid ${ACCENT}44`,borderRadius:8,padding:"9px 14px",cursor:"pointer",textAlign:"right"}}>⭐ XP Bank</button>
           <button onClick={()=>setSubScreen("students")} style={{fontWeight:700,fontSize:13,background:"#1a1a3a",color:"#ccc",border:"1px solid #2a2a5a",borderRadius:8,padding:"9px 14px",cursor:"pointer",textAlign:"right"}}>👥 Students</button>
+          <button onClick={()=>setSubScreen("subjects")} style={{fontWeight:700,fontSize:13,background:"#1a1a3a",color:"#ccc",border:"1px solid #2a2a5a",borderRadius:8,padding:"9px 14px",cursor:"pointer",textAlign:"right"}}>📚 Subjects</button>
           <button onClick={()=>setShowSummary(true)} style={{fontWeight:700,fontSize:13,background:"#0a2a1a",color:GREEN,border:`1px solid ${GREEN}44`,borderRadius:8,padding:"9px 14px",cursor:"pointer",textAlign:"right"}}>📋 Summary</button>
           <button onClick={()=>showConfirm("Reset ALL students? Clears timers, checklists, and today's reports. XP and streaks are safe.",onResetAll)} style={{fontWeight:700,fontSize:13,background:"#2a0a0a",color:"#e05050",border:"1px solid #5a1a1a",borderRadius:8,padding:"9px 14px",cursor:"pointer",textAlign:"right"}}>🕐 Reset all</button>
           <button onClick={onTeacherSignOut} style={{fontWeight:700,fontSize:13,background:"transparent",color:"#555",border:"1px solid #2a2a5a",borderRadius:8,padding:"9px 14px",cursor:"pointer",textAlign:"right"}}>Sign out</button>
@@ -971,7 +1202,7 @@ export default function App() {
       const allStudents=fams.flatMap(f=>f.students);
       const seeded={...subs};
       for(const name of allStudents){
-        if(!seeded[name]) seeded[name]={Math:[],ELA:[],Core:[],AutoNav:[],Skills:[]};
+        if(!seeded[name]) seeded[name]={MathM:[],ELA:[],Core:[],AutoNav:[],Skills:[]};
       }
       setStudentSubjects(seeded);
 
@@ -1137,6 +1368,7 @@ export default function App() {
       onApprove={handleApprove} onResetAll={handleResetAll} onResetStudent={handleResetStudent}
       onFamiliesChange={f=>setFamilies(f)} onBalanceUpdate={(n,v)=>setBalances(b=>({...b,[n]:v}))}
       onPinsChange={setPins} onBack={()=>setScreen("launchpad")}
+      studentSubjects={studentSubjects} onSubjectsChange={setStudentSubjects}
       onTeacherSignOut={handleTeacherSignOut}/>
   );
 

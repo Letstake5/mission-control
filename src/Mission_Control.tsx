@@ -1120,7 +1120,7 @@ function TeacherView({families,sessions,teacherReports,approved,balances,streaks
   return (
     <div style={{background:BG,minHeight:"100vh",padding:"1.5rem"}}>
       {confirmModal&&<ConfirmModal message={confirmModal.msg} onConfirm={()=>{confirmModal.cb();setConfirmModal(null);}} onCancel={()=>setConfirmModal(null)}/>}
-      {showSummary&&<DailySummary reports={teacherReports} families={families} onClose={()=>setShowSummary(false)}/>}
+      {showSummary&&<DailySummary reports={teacherReports} families={families} slotAssignments={studentSubjects} onClose={()=>setShowSummary(false)}/>}
       {showAddTeacher&&<AddTeacherModal onClose={()=>setShowAddTeacher(false)}/>}
       <div style={{display:"flex",gap:"1.25rem",marginBottom:"1.5rem",alignItems:"flex-start"}}>
         <div style={{flex:1}}>

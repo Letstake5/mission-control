@@ -1195,7 +1195,11 @@ function TeacherView({families,sessions,teacherReports,approved,balances,streaks
       </div>
       {teacherReports.length===0
         ?<p style={{fontSize:16,color:"#888",fontWeight:600}}>No reports submitted yet today.</p>
-        :teacherReports.map((r,i)=>(
+        :teacherReports.map((r,i)=>{
+          const studentAssigns = (studentSubjects && studentSubjects[r.student]) || {};
+          const itemById = Object.fromEntries(PANTRY.map(p => [p.id, p]));
+          const flatItems = SLOTS.flatMap(slot => (studentAssigns[slot.id] || []).map(id => itemById[id]).filter(Boolean));
+          return (
           <div key={i} style={{background:CARD,border:"1px solid #2a2a5a",borderRadius:14,padding:"1rem 1.25rem",marginBottom:"1rem"}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
               <span style={{fontWeight:700,fontSize:18,color:"#fff"}}>{r.student}</span>
@@ -1213,7 +1217,7 @@ function TeacherView({families,sessions,teacherReports,approved,balances,streaks
               <thead><tr>{["Subject","Completed at","Duration","Status"].map(h=>(
                 <th key={h} style={{textAlign:h==="Subject"?"left":"right",color:"#555",fontWeight:700,paddingBottom:6,fontSize:12}}>{h}</th>
               ))}</tr></thead>
-              <tbody>{SUBJECTS.map(s=>(
+              <tbody>{flatItems.length===0?<tr><td colSpan={4} style={{padding:"5px 0",color:"#666",fontStyle:"italic"}}>No subjects assigned</td></tr>:flatItems.map(s=>(
                 <tr key={s.id} style={{borderTop:"0.5px solid #1a1a3a"}}>
                   <td style={{padding:"5px 0",color:"#ccc",fontWeight:600}}>{s.label}</td>
                   <td style={{textAlign:"right",padding:"5px 0",color:"#888",fontWeight:600}}>{r.timestamps[s.id]||"—"}</td>
@@ -1230,7 +1234,7 @@ function TeacherView({families,sessions,teacherReports,approved,balances,streaks
                 :<button onClick={()=>onApprove(i)} style={{fontWeight:700,fontSize:14,background:GREEN,color:"#fff",border:"none",borderRadius:8,padding:"9px 20px",cursor:"pointer"}}>Approve day</button>}
             </div>
           </div>
-        ))
+        )})
       }
     </div>
   );

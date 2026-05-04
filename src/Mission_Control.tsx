@@ -599,7 +599,7 @@ function DailySummary({reports, families, slotAssignments, onClose}) {
           @page { margin: 0.5in; }
           body { background: #FFFFFF !important; }
           body * { visibility: hidden !important; }
-          .ds-modal, ds.modal * {visibility: visible !important; }
+          .ds-modal, .ds-modal * {visibility: visible !important; }
           .ds-backdrop { position: static !important; background: transparent !important; padding: 0 !important; overflow: visible !important; display: block !important; visibility: hidden !important; }
           .ds-modal { position: absolute !important; left: 0 !important; top: 0 !important; width: 100% !important; box-shadow: none !important; border: none !important; max-width: 100% !important; margin: 0 !important; padding: 0 !important; background: #FFFFFF !important; }
           .ds-buttons { display: none !important; }

@@ -14,19 +14,6 @@ const DEFAULT_FAMILIES = [
   { id: 2, name: "Croasmun Family", students: ["Allison C.", "Kate C.", "Titus C.", "Adaline C.", "Oksana C.", "Willow C.", "Haven C."] },
   { id: 3, name: "Jackson Family", students: ["Elijah J."] },
 ];
-const SUBJECTS = [
-  { id:"math_video",    label:"Math Video",             abbr:"MaV",  group:"Math",   xp:1 },
-  { id:"math_practice", label:"Math Practice",          abbr:"MaP",  group:"Math",   xp:2 },
-  { id:"math_review",   label:"Math Review",            abbr:"MaR",  group:"Math",   xp:3 },
-  { id:"ela_lesson",    label:"ELA / Phonics Lesson",   abbr:"ELA-L",group:"ELA",    xp:1 },
-  { id:"ela_practice",  label:"ELA / Phonics Practice", abbr:"ELA-P",group:"ELA",    xp:2 },
-  { id:"ela_review",    label:"ELA / Phonics Review",   abbr:"ELA-R",group:"ELA",    xp:3 },
-  { id:"science",       label:"Science",                abbr:"Sci",  group:"Core",   xp:3 },
-  { id:"history",       label:"History",                abbr:"His",  group:"Core",   xp:3 },
-  { id:"spanish",       label:"Spanish",                abbr:"Spa",  group:"Core",   xp:2 },
-  { id:"typing",        label:"Typing",                 abbr:"Typ",  group:"Skills", xp:2 },
-  { id:"spelling",      label:"Spelling",               abbr:"Spell",group:"Skills", xp:3 },
-];
 
 // ── PANTRY + SLOTS (Stage 3b — defined but not yet wired up) ─────────────────
 // PANTRY is the master catalog of all 104 subjects. defaultGroup decides
@@ -180,7 +167,6 @@ function getRemainingMs(s) {
   if(s.isPaused||!s.startEpoch) return s.pausedRemainingMs;
   return Math.max(0,s.pausedRemainingMs-(Date.now()-s.startEpoch));
 }
-function subjectXP(session) { return SUBJECTS.reduce((sum,s)=>sum+(session.completed[s.id]?s.xp:0),0); }
 function normalizeId(name) { return name.replace(/[\s.]/g,"").toLowerCase(); }
 
 // ── UI Primitives ─────────────────────────────────────────────────────────────

@@ -14,19 +14,6 @@ const DEFAULT_FAMILIES = [
   { id: 2, name: "Croasmun Family", students: ["Allison C.", "Kate C.", "Titus C.", "Adaline C.", "Oksana C.", "Willow C.", "Haven C."] },
   { id: 3, name: "Jackson Family", students: ["Elijah J."] },
 ];
-const SUBJECTS = [
-  { id:"math_video",    label:"Math Video",             abbr:"MaV",  group:"Math",   xp:1 },
-  { id:"math_practice", label:"Math Practice",          abbr:"MaP",  group:"Math",   xp:2 },
-  { id:"math_review",   label:"Math Review",            abbr:"MaR",  group:"Math",   xp:3 },
-  { id:"ela_lesson",    label:"ELA / Phonics Lesson",   abbr:"ELA-L",group:"ELA",    xp:1 },
-  { id:"ela_practice",  label:"ELA / Phonics Practice", abbr:"ELA-P",group:"ELA",    xp:2 },
-  { id:"ela_review",    label:"ELA / Phonics Review",   abbr:"ELA-R",group:"ELA",    xp:3 },
-  { id:"science",       label:"Science",                abbr:"Sci",  group:"Core",   xp:3 },
-  { id:"history",       label:"History",                abbr:"His",  group:"Core",   xp:3 },
-  { id:"spanish",       label:"Spanish",                abbr:"Spa",  group:"Core",   xp:2 },
-  { id:"typing",        label:"Typing",                 abbr:"Typ",  group:"Skills", xp:2 },
-  { id:"spelling",      label:"Spelling",               abbr:"Spell",group:"Skills", xp:3 },
-];
 
 // ── PANTRY + SLOTS (Stage 3b — defined but not yet wired up) ─────────────────
 // PANTRY is the master catalog of all 104 subjects. defaultGroup decides
@@ -180,7 +167,6 @@ function getRemainingMs(s) {
   if(s.isPaused||!s.startEpoch) return s.pausedRemainingMs;
   return Math.max(0,s.pausedRemainingMs-(Date.now()-s.startEpoch));
 }
-function subjectXP(session) { return SUBJECTS.reduce((sum,s)=>sum+(session.completed[s.id]?s.xp:0),0); }
 function normalizeId(name) { return name.replace(/[\s.]/g,"").toLowerCase(); }
 
 // ── UI Primitives ─────────────────────────────────────────────────────────────
@@ -582,68 +568,122 @@ function ManageStudents({families,onChange,onBack}) {
 }
 
 // ── Daily Summary ─────────────────────────────────────────────────────────────
-function DailySummary({reports,families,onClose}) {
-  const groups = ["Math","ELA","Core","Skills"];
-  const groupColors = { Math:"#6080ff", ELA:"#c060ff", Core:"#ff9955", Skills:"#40c0c0" };
+function DailySummary({reports, families, slotAssignments, onClose}) {
+  const fmtTotalDuration = (ms) => {
+    if (!ms) return "0m";
+    const totalMin = Math.floor(ms / 60000);
+    const h = Math.floor(totalMin / 60);
+    const m = totalMin % 60;
+    return h > 0 ? `${h}h ${m}m` : `${m}m`;
+  };
+  const itemById = Object.fromEntries(PANTRY.map(p => [p.id, p]));
+
   return (
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"flex-start",justifyContent:"center",zIndex:200,overflowY:"auto",padding:"1rem"}}>
-      <div style={{background:CARD,borderRadius:16,padding:"1.5rem",width:"100%",maxWidth:700,marginTop:"1rem",marginBottom:"1rem",border:"1px solid #2a2a5a"}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"1rem"}}>
+    <div className="ds-backdrop" style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"flex-start",justifyContent:"center",zIndex:200,overflowY:"auto",padding:"1rem"}}>
+      <style>{`
+        @media print {
+          @page { margin: 0.5in; }
+          body { background: #FFFFFF !important; }
+          body * { visibility: hidden !important; }
+          .ds-modal, .ds-modal * {visibility: visible !important; }
+          .ds-backdrop { position: static !important; background: transparent !important; padding: 0 !important; overflow: visible !important; display: block !important; visibility: hidden !important; }
+          .ds-modal { position: absolute !important; left: 0 !important; top: 0 !important; width: 100% !important; box-shadow: none !important; border: none !important; max-width: 100% !important; margin: 0 !important; padding: 0 !important; background: #FFFFFF !important; }
+          .ds-buttons { display: none !important; }
+          .ds-topbar { padding-bottom: 6px !important; margin-bottom: 8px !important; border-bottom-color: #2A2A1A !important; }
+          .ds-title { font-size: 16px !important; }
+          .ds-date { font-size: 11px !important; }
+          .ds-family-pill { background: #2A2A1A !important; color: #FFFFFF !important; font-size: 10px !important; padding: 4px 10px !important; margin: 0.7rem 0 0.4rem !important; }
+          .ds-student { background: #FFFFFF !important; border: 1px solid #999 !important; padding: 0.5rem 0.7rem 0.6rem !important; margin-bottom: 0.5rem !important; break-inside: avoid !important; page-break-inside: avoid !important; }
+          .ds-student-name { font-size: 14px !important; margin-bottom: 0.2rem !important; }
+          .ds-stats { font-size: 10px !important; gap: 0.85rem !important; margin-bottom: 0.4rem !important; padding-bottom: 0.35rem !important; }
+          .ds-stat-strong { font-size: 11px !important; }
+          .ds-slot-grid { column-count: 2 !important; column-gap: 1.25rem !important; column-rule: 1px solid #E5D5BB !important; }
+          .ds-slot { break-inside: avoid !important; page-break-inside: avoid !important; margin-bottom: 0.45rem !important; display: block !important; }
+          .ds-slot-header { font-size: 9.5px !important; letter-spacing: 0.08em !important; padding-bottom: 1px !important; margin-bottom: 2px !important; border-bottom-color: #2A2A1A !important; }
+          .ds-item { font-size: 11px !important; padding: 2px 2px !important; }
+          .ds-duration { font-size: 10px !important; }
+          .ds-empty-note { font-size: 9px !important; padding: 2px !important; }
+          .ds-skipped-tag { font-size: 9.5px !important; }
+        }
+      `}</style>
+      <div className="ds-modal" style={{background:"#F5E6D3",borderRadius:16,padding:"1.5rem 1.75rem 1.75rem",width:"100%",maxWidth:760,marginTop:"1rem",marginBottom:"1rem",border:"1px solid #D9C9B0",boxShadow:"0 8px 40px rgba(0,0,0,0.5)"}}>
+        <div className="ds-topbar" style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:"1rem",marginBottom:"1.25rem",paddingBottom:"0.9rem",borderBottom:"1.5px solid #D9C9B0"}}>
           <div>
-            <h3 style={{margin:0,fontWeight:700,fontSize:20,color:"#fff"}}>Daily summary</h3>
-            <p style={{margin:0,fontSize:13,color:"#888",fontWeight:600}}>{dateStr()}</p>
+            <h3 className="ds-title" style={{margin:0,fontSize:26,fontWeight:800,color:"#2A2A1A",letterSpacing:"-0.01em"}}>Daily Summary</h3>
+            <p className="ds-date" style={{margin:"4px 0 0",fontSize:15,color:"#776655",fontWeight:600}}>{dateStr()}</p>
           </div>
-          <button onClick={onClose} style={{fontWeight:700,fontSize:14,background:"#2a2a5a",color:"#ccc",border:"none",borderRadius:8,padding:"9px 14px",cursor:"pointer"}}>Close</button>
+          <div className="ds-buttons" style={{display:"flex",gap:8,flexShrink:0}}>
+            <button onClick={()=>window.print()} style={{border:"none",borderRadius:8,padding:"10px 16px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit",background:"#8B5A3C",color:"#FBF1E2"}}>🖨️ Print</button>
+            <button onClick={onClose} style={{border:"none",borderRadius:8,padding:"10px 16px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit",background:"#D9C9B0",color:"#2A2A1A"}}>Close</button>
+          </div>
         </div>
-        {reports.length===0
-          ? <p style={{color:"#888",fontWeight:600}}>No submissions yet today.</p>
-          : families.map(fam=>{
-              const famR=reports.filter(r=>fam.students.includes(r.student));
-              if(!famR.length) return null;
+
+        {reports.length === 0
+          ? <p style={{color:"#776655",fontWeight:600,fontSize:15}}>No submissions yet today.</p>
+          : families.map(fam => {
+              const famReports = reports.filter(r => fam.students.includes(r.student));
+              if (!famReports.length) return null;
               return (
-                <div key={fam.id} style={{marginBottom:"1rem"}}>
-                  <p style={{margin:"0 0 6px",fontWeight:700,fontSize:14,color:"#fff",background:"#1a1a3a",padding:"6px 10px",borderRadius:8}}>{fam.name}</p>
-                  <div style={{overflowX:"auto"}}>
-                    <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-                      <thead><tr>
-                        <th style={{textAlign:"left",padding:"4px 8px",color:"#888",fontWeight:700,borderBottom:"1px solid #2a2a5a"}}>Student</th>
-                        {SUBJECTS.map(s=><th key={s.id} style={{textAlign:"center",padding:"4px 3px",color:groupColors[s.group],fontWeight:700,borderBottom:"1px solid #2a2a5a",fontSize:10}}>{s.abbr}</th>)}
-                        <th style={{textAlign:"center",padding:"4px 6px",color:"#888",fontWeight:700,borderBottom:"1px solid #2a2a5a"}}>Mins</th>
-                        <th style={{textAlign:"center",padding:"4px 6px",color:"#888",fontWeight:700,borderBottom:"1px solid #2a2a5a"}}>XP</th>
-                      </tr></thead>
-                      <tbody>{famR.map((r,i)=>(
-                        <tr key={i} style={{borderBottom:"0.5px solid #2a2a5a"}}>
-                          <td style={{padding:"6px 8px",fontWeight:700,color:"#fff",whiteSpace:"nowrap"}}>{r.student}</td>
-                          {SUBJECTS.map(s=><td key={s.id} style={{textAlign:"center",padding:"6px 2px",fontWeight:700,color:r.completed[s.id]?GREEN:"#333"}}>{r.completed[s.id]?"✓":"–"}</td>)}
-                          <td style={{textAlign:"center",padding:"6px 4px",fontWeight:700,color:"#aaa"}}>{r.earlyMins>0?r.earlyMins:"—"}</td>
-                          <td style={{textAlign:"center",padding:"6px 4px",fontWeight:700,color:ACCENT}}>{r.xpEarned||0}</td>
-                        </tr>
-                      ))}</tbody>
-                    </table>
-                  </div>
+                <div key={fam.id}>
+                  <span className="ds-family-pill" style={{display:"inline-block",background:"#8B5A3C",color:"#FBF1E2",padding:"7px 16px",borderRadius:999,fontSize:13,fontWeight:700,letterSpacing:"0.06em",textTransform:"uppercase",margin:"1.5rem 0 0.85rem"}}>{fam.name}</span>
+                  {famReports.map((r, i) => {
+                    const studentAssigns = (slotAssignments && slotAssignments[r.student]) || {};
+                    let totalDurationMs = 0;
+                    Object.values(r.durations || {}).forEach(d => totalDurationMs += (d || 0));
+                    const completedCount = Object.values(r.completed || {}).filter(Boolean).length;
+                    let assignedCount = 0;
+                    for (const slot of SLOTS) assignedCount += (studentAssigns[slot.id] || []).length;
+
+                    return (
+                      <div key={i} className="ds-student" style={{background:"#FBF1E2",border:"1px solid #E5D5BB",borderRadius:12,padding:"1.1rem 1.3rem 1.25rem",marginBottom:"1.1rem"}}>
+                        <h4 className="ds-student-name" style={{margin:"0 0 0.45rem",fontSize:22,fontWeight:800,color:"#2A2A1A"}}>{r.student}</h4>
+                        <div className="ds-stats" style={{display:"flex",flexWrap:"wrap",gap:"1.25rem",fontSize:14,color:"#5A4A3A",marginBottom:"0.95rem",paddingBottom:"0.85rem",borderBottom:"1px dashed #D9C9B0",fontWeight:600}}>
+                          <span><strong className="ds-stat-strong" style={{color:"#2A2A1A",fontSize:16,marginRight:4}}>{fmtTotalDuration(totalDurationMs)}</strong> total time</span>
+                          <span><strong className="ds-stat-strong" style={{color:"#2A2A1A",fontSize:16,marginRight:4}}>{r.xpEarned||0}</strong> XP earned</span>
+                          <span><strong className="ds-stat-strong" style={{color:"#2A2A1A",fontSize:16,marginRight:4}}>{completedCount} / {assignedCount}</strong> assigned subjects done</span>
+                        </div>
+                        <div className="ds-slot-grid">
+                          {SLOTS.map(slot => {
+                            const assignedIds = studentAssigns[slot.id] || [];
+                            const assignedItems = assignedIds.map(id => itemById[id]).filter(Boolean);
+                            const showSkipped = slot.requiredForStreak;
+                            const itemsToShow = showSkipped
+                              ? assignedItems
+                              : assignedItems.filter(item => r.completed[item.id]);
+                            return (
+                              <div key={slot.id} className="ds-slot" style={{marginBottom:"0.95rem"}}>
+                                <p className="ds-slot-header" style={{margin:"0 0 6px",fontSize:13,fontWeight:800,color:"#5A4A3A",textTransform:"uppercase",letterSpacing:"0.11em",borderBottom:"1px solid #E5D5BB",paddingBottom:4}}>{slot.label}</p>
+                                {itemsToShow.length === 0
+                                  ? <p className="ds-empty-note" style={{margin:0,padding:"6px 4px",fontSize:14,color:"#A89580",fontStyle:"italic"}}>— nothing completed —</p>
+                                  : itemsToShow.map(item => {
+                                      const isDone = r.completed[item.id];
+                                      return (
+                                        <div key={item.id} className="ds-item" style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",padding:"7px 4px",fontSize:17,borderBottom:"1px dotted #E5D5BB"}}>
+                                          {isDone
+                                            ? <>
+                                                <span style={{color:"#1D7A5A",fontWeight:700}}>✓ {item.label}</span>
+                                                <span className="ds-duration" style={{color:"#5A4A3A",fontSize:14,fontWeight:600,fontVariantNumeric:"tabular-nums"}}>{fmtDuration(r.durations[item.id])}</span>
+                                              </>
+                                            : <>
+                                                <span style={{color:"#A89580",fontStyle:"italic"}}>○ {item.label}</span>
+                                                <span className="ds-skipped-tag" style={{color:"#A89580",fontSize:13,fontWeight:600,fontStyle:"italic"}}>not done</span>
+                                              </>
+                                          }
+                                        </div>
+                                      );
+                                    })
+                                }
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               );
             })
         }
-        <div style={{marginTop:"1.25rem",borderTop:"1px solid #2a2a5a",paddingTop:"1rem"}}>
-          <p style={{margin:"0 0 10px",fontSize:12,fontWeight:700,color:"#555",textTransform:"uppercase",letterSpacing:"0.08em"}}>Key</p>
-          <div style={{display:"flex",flexWrap:"wrap",gap:"0.75rem 2rem"}}>
-            {groups.map(grp=>(
-              <div key={grp}>
-                <p style={{margin:"0 0 4px",fontSize:11,fontWeight:700,color:groupColors[grp],textTransform:"uppercase",letterSpacing:"0.06em"}}>{grp}</p>
-                <div style={{display:"flex",flexDirection:"column",gap:2}}>
-                  {SUBJECTS.filter(s=>s.group===grp).map(s=>(
-                    <div key={s.id} style={{display:"flex",alignItems:"center",gap:6}}>
-                      <span style={{fontSize:11,fontWeight:800,color:groupColors[grp],minWidth:38,fontFamily:"monospace"}}>{s.abbr}</span>
-                      <span style={{fontSize:11,color:"#888",fontWeight:600}}>{s.label}</span>
-                      <span style={{fontSize:10,color:ACCENT,fontWeight:700,marginLeft:2}}>+{s.xp}xp</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
       </div>
     </div>
   );
@@ -1120,7 +1160,7 @@ function TeacherView({families,sessions,teacherReports,approved,balances,streaks
   return (
     <div style={{background:BG,minHeight:"100vh",padding:"1.5rem"}}>
       {confirmModal&&<ConfirmModal message={confirmModal.msg} onConfirm={()=>{confirmModal.cb();setConfirmModal(null);}} onCancel={()=>setConfirmModal(null)}/>}
-      {showSummary&&<DailySummary reports={teacherReports} families={families} onClose={()=>setShowSummary(false)}/>}
+      {showSummary&&<DailySummary reports={teacherReports} families={families} slotAssignments={studentSubjects} onClose={()=>setShowSummary(false)}/>}
       {showAddTeacher&&<AddTeacherModal onClose={()=>setShowAddTeacher(false)}/>}
       <div style={{display:"flex",gap:"1.25rem",marginBottom:"1.5rem",alignItems:"flex-start"}}>
         <div style={{flex:1}}>
@@ -1141,7 +1181,11 @@ function TeacherView({families,sessions,teacherReports,approved,balances,streaks
       </div>
       {teacherReports.length===0
         ?<p style={{fontSize:16,color:"#888",fontWeight:600}}>No reports submitted yet today.</p>
-        :teacherReports.map((r,i)=>(
+        :teacherReports.map((r,i)=>{
+          const studentAssigns = (studentSubjects && studentSubjects[r.student]) || {};
+          const itemById = Object.fromEntries(PANTRY.map(p => [p.id, p]));
+          const flatItems = SLOTS.flatMap(slot => (studentAssigns[slot.id] || []).map(id => itemById[id]).filter(Boolean));
+          return (
           <div key={i} style={{background:CARD,border:"1px solid #2a2a5a",borderRadius:14,padding:"1rem 1.25rem",marginBottom:"1rem"}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
               <span style={{fontWeight:700,fontSize:18,color:"#fff"}}>{r.student}</span>
@@ -1159,7 +1203,7 @@ function TeacherView({families,sessions,teacherReports,approved,balances,streaks
               <thead><tr>{["Subject","Completed at","Duration","Status"].map(h=>(
                 <th key={h} style={{textAlign:h==="Subject"?"left":"right",color:"#555",fontWeight:700,paddingBottom:6,fontSize:12}}>{h}</th>
               ))}</tr></thead>
-              <tbody>{SUBJECTS.map(s=>(
+              <tbody>{flatItems.length===0?<tr><td colSpan={4} style={{padding:"5px 0",color:"#666",fontStyle:"italic"}}>No subjects assigned</td></tr>:flatItems.map(s=>(
                 <tr key={s.id} style={{borderTop:"0.5px solid #1a1a3a"}}>
                   <td style={{padding:"5px 0",color:"#ccc",fontWeight:600}}>{s.label}</td>
                   <td style={{textAlign:"right",padding:"5px 0",color:"#888",fontWeight:600}}>{r.timestamps[s.id]||"—"}</td>
@@ -1176,7 +1220,7 @@ function TeacherView({families,sessions,teacherReports,approved,balances,streaks
                 :<button onClick={()=>onApprove(i)} style={{fontWeight:700,fontSize:14,background:GREEN,color:"#fff",border:"none",borderRadius:8,padding:"9px 20px",cursor:"pointer"}}>Approve day</button>}
             </div>
           </div>
-        ))
+        )})
       }
     </div>
   );

@@ -1259,7 +1259,8 @@ export default function App() {
 
   // ── Load data from Firestore ────────────────────────────────────────────────
   useEffect(()=>{
-    if(!authReady || !teacherUser) return;
+    if(!authReady) return;
+    if(!teacherUser){ setDataLoading(false); return; }
     Promise.all([
       fsGet(PATHS.roster, DEFAULT_FAMILIES),
       fsGet(PATHS.balances, {}),

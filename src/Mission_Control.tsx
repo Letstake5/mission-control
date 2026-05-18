@@ -1259,6 +1259,8 @@ export default function App() {
 
   // ── Load data from Firestore ────────────────────────────────────────────────
   useEffect(()=>{
+    if(!authReady) return;
+    if(!teacherUser){ setDataLoading(false); return; }
     Promise.all([
       fsGet(PATHS.roster, DEFAULT_FAMILIES),
       fsGet(PATHS.balances, {}),
@@ -1274,7 +1276,7 @@ export default function App() {
       const allStudents=fams.flatMap(f=>f.students);
       const seeded={...subs};
       for(const name of allStudents){
-        if(!seeded[name]) seeded[name]={MathM:[],ELA:[],Core:[],AutoNav:[],Skills:[]};
+        if(!seeded[name]) seeded[name]={Math:[],ELA:[],Core:[],AutoNav:[],Skills:[]};
       }
       setStudentSubjects(seeded);
 
@@ -1292,7 +1294,7 @@ export default function App() {
       setSessions(merged);
       setDataLoading(false);
     });
-  },[]);
+  },[authReady, teacherUser?.uid]);
 
   // ── 3AM expiry ──────────────────────────────────────────────────────────────
   useEffect(()=>{
@@ -1490,7 +1492,7 @@ export default function App() {
   // ── Launch Pad ──────────────────────────────────────────────────────────────
   return (
     <LaunchPad
-      families={families} sessions={sessions} streaks={streaks} balances={balances} studentSubjects={studentSubjects} studentSubjects={studentSubjects} studentSubjects={studentSubjects} studentSubjects={studentSubjects}
+      families={families} sessions={sessions} streaks={streaks} balances={balances} studentSubjects={studentSubjects}
       onSelectStudent={handleSelectStudent}
       onTeacherAccess={()=>{ if(teacherUser) setScreen("teacher"); }}
       onLogout={handleStudentLogout}/>

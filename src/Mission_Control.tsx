@@ -689,6 +689,331 @@ function DailySummary({reports, families, slotAssignments, onClose}) {
   );
 }
 
+// ── Student Picker (used by Weekly Report) ───────────────────────────────────
+// Small dark modal listing every student grouped by family. Click a student
+// to open the Weekly Report for them. Matches the AddTeacherModal visual style.
+function StudentPickerModal({families, onPick, onClose}) {
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:300,padding:"1rem"}}>
+      <div style={{background:CARD,borderRadius:20,padding:"1.75rem",width:"100%",maxWidth:380,border:"1px solid #2a2a5a",maxHeight:"85vh",overflowY:"auto"}}>
+        <div style={{textAlign:"center",marginBottom:"1.25rem"}}>
+          <div style={{fontSize:36,marginBottom:6}}>📅</div>
+          <h3 style={{margin:"0 0 4px",fontWeight:800,fontSize:20,color:"#fff"}}>Weekly Report</h3>
+          <p style={{margin:0,fontSize:13,color:"#888",fontWeight:600}}>Pick a student to generate their report.</p>
+        </div>
+        {(!families || families.length === 0)
+          ? <p style={{textAlign:"center",color:"#888",fontWeight:600,fontSize:14}}>No students yet.</p>
+          : families.map(fam => (
+              <div key={fam.id} style={{marginBottom:"1rem"}}>
+                <p style={{margin:"0 0 6px",fontSize:11,fontWeight:800,color:"#888",textTransform:"uppercase",letterSpacing:"0.08em"}}>{fam.name}</p>
+                {fam.students.length === 0
+                  ? <p style={{margin:0,fontSize:13,color:"#555",fontStyle:"italic"}}>— no students —</p>
+                  : fam.students.map(s => (
+                      <button key={s} onClick={()=>onPick(s, fam.name)} style={{display:"block",width:"100%",textAlign:"left",padding:"10px 14px",marginBottom:6,borderRadius:8,border:"1px solid #2a2a5a",background:"#1a1a3a",color:"#fff",fontWeight:700,fontSize:15,cursor:"pointer",fontFamily:"inherit"}}>
+                        {s}
+                      </button>
+                    ))
+                }
+              </div>
+            ))
+        }
+        <button onClick={onClose} style={{width:"100%",padding:"11px",borderRadius:8,border:"1.5px solid #2a2a5a",background:"transparent",fontWeight:700,fontSize:15,cursor:"pointer",color:"#888",marginTop:"0.5rem"}}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Weekly Report (Stage 3d) ──────────────────────────────────────────────────
+// 5-day printable report per student. 3 school days (top row) + 2 home days
+// (bottom row, blue border) + Notes column in the 6th cell. Reads from existing
+// reports/<dateKey> docs. Stage 4 will populate report.location and report.note
+// — until then, everything renders as school with no notes.
+function WeeklyReport({student, family, studentAssignments, onClose}) {
+  const [dates, setDates] = useState(["","","","",""]);
+  const [reports, setReports] = useState([null,null,null,null,null]);
+  const [loading, setLoading] = useState(true);
+  const [autoFilled, setAutoFilled] = useState(false);
+
+  // Walk back from today to find the 3 most recent school dates and 2 most
+  // recent home dates with submissions. "Home" is decided by report.location
+  // (Stage 4 field); absent or anything else = school. Stops at 60 days back
+  // as a safety limit. Until Stage 4 starts tagging home days, homeFound stays
+  // empty and the bottom row of date pickers auto-fills blank.
+  useEffect(() => {
+    let cancelled = false;
+    async function fillDates() {
+      const schoolFound = [];
+      const homeFound = [];
+      const nowMs = Date.now();
+      const DAY_MS = 24*60*60*1000;
+      const MAX_DAYS_BACK = 60;
+      for (let i = 0; i < MAX_DAYS_BACK && (schoolFound.length < 3 || homeFound.length < 2); i++) {
+        const dk = new Date(nowMs - i*DAY_MS).toISOString().slice(0,10);
+        const data = await fsGet(PATHS.reports(dk), null);
+        if (cancelled) return;
+        if (data && data.list) {
+          const r = data.list.find(r => r.student === student);
+          if (r) {
+            if (r.location === "home" && homeFound.length < 2) homeFound.push(dk);
+            else if (r.location !== "home" && schoolFound.length < 3) schoolFound.push(dk);
+          }
+        }
+      }
+      const newDates = [
+        schoolFound[0] || "", schoolFound[1] || "", schoolFound[2] || "",
+        homeFound[0]   || "", homeFound[1]   || "",
+      ];
+      if (!cancelled) { setDates(newDates); setAutoFilled(true); }
+    }
+    fillDates();
+    return () => { cancelled = true; };
+  }, [student]);
+
+  // Load the report for each picked date (re-runs whenever a date changes).
+  useEffect(() => {
+    if (!autoFilled) return;
+    let cancelled = false;
+    async function loadReports() {
+      setLoading(true);
+      const result = await Promise.all(dates.map(async (dk) => {
+        if (!dk) return null;
+        const data = await fsGet(PATHS.reports(dk), null);
+        if (!data || !data.list) return null;
+        return data.list.find(r => r.student === student) || null;
+      }));
+      if (!cancelled) { setReports(result); setLoading(false); }
+    }
+    loadReports();
+    return () => { cancelled = true; };
+  }, [dates, autoFilled]);
+
+  const fmtTotalDuration = (ms) => {
+    if (!ms) return "0m";
+    const totalMin = Math.floor(ms / 60000);
+    const h = Math.floor(totalMin / 60);
+    const m = totalMin % 60;
+    return h > 0 ? `${h}h ${m}m` : `${m}m`;
+  };
+  const fmtDateHeader = (dk) => {
+    if (!dk) return "—";
+    const d = new Date(dk + "T12:00:00");
+    return d.toLocaleDateString([], {weekday:"short", month:"short", day:"numeric"});
+  };
+  const itemById = Object.fromEntries(PANTRY.map(p => [p.id, p]));
+
+  // Roll up totals across all 5 days for the footer.
+  let totalMs = 0, totalXP = 0, totalAssigned = 0, totalCompleted = 0, schoolDays = 0, homeDays = 0;
+  reports.forEach((r, i) => {
+    if (!r) return;
+    Object.values(r.durations || {}).forEach(d => totalMs += (d || 0));
+    totalXP += (r.xpEarned || 0);
+    totalCompleted += Object.values(r.completed || {}).filter(Boolean).length;
+    let assignedCount = 0;
+    for (const slot of SLOTS) assignedCount += ((studentAssignments && studentAssignments[slot.id]) || []).length;
+    totalAssigned += assignedCount;
+    const isHome = r.location === "home" || i >= 3;
+    if (isHome) homeDays++; else schoolDays++;
+  });
+
+  function renderDayCell(report, dateKey, isHomeSlot) {
+    // Home decoration is data-driven when a report exists (report.location === "home").
+    // When there is no data (empty slot or missing submission) we fall back to slot
+    // position so the empty cell still visually aligns with its row.
+    const hasData = !!report;
+    const isHome = hasData ? (report.location === "home") : isHomeSlot;
+    const cellStyle = {
+      background: isHome ? "#F4F8FE" : "#FBF1E2",
+      border: isHome ? `2px solid ${BLUE}` : "1px solid #E5D5BB",
+      borderRadius: 12,
+      padding: "0.75rem 0.85rem 0.85rem",
+    };
+    if (!dateKey) {
+      return (
+        <div className={`wr-day-cell${isHome ? " home" : ""}`} style={cellStyle}>
+          <p className="wr-day-empty" style={{textAlign:"center",color:"#A89580",fontStyle:"italic",fontSize:12,padding:"1.5rem 0",margin:0}}>— no date selected —</p>
+        </div>
+      );
+    }
+    const headerRow = (
+      <p className="wr-day-header" style={{margin:"0 0 4px",fontSize:14,fontWeight:800,color:"#2A2A1A",textTransform:"uppercase",letterSpacing:"0.06em",display:"flex",justifyContent:"space-between",alignItems:"center",gap:6}}>
+        <span>{fmtDateHeader(dateKey)}</span>
+        {isHome && <span className="wr-home-tag" style={{background:BLUE,color:"#FFFFFF",fontSize:9,fontWeight:800,padding:"2px 7px",borderRadius:999,letterSpacing:"0.08em"}}>🏠 HOME</span>}
+      </p>
+    );
+    if (!report) {
+      return (
+        <div className={`wr-day-cell${isHome ? " home" : ""}`} style={cellStyle}>
+          {headerRow}
+          <p className="wr-day-empty" style={{textAlign:"center",color:"#A89580",fontStyle:"italic",fontSize:12,padding:"1rem 0",margin:0}}>— no submission —</p>
+        </div>
+      );
+    }
+    let dayMs = 0;
+    Object.values(report.durations || {}).forEach(d => dayMs += (d || 0));
+    const completedCount = Object.values(report.completed || {}).filter(Boolean).length;
+    let assignedCount = 0;
+    for (const slot of SLOTS) assignedCount += ((studentAssignments && studentAssignments[slot.id]) || []).length;
+    return (
+      <div className={`wr-day-cell${isHome ? " home" : ""}`} style={cellStyle}>
+        {headerRow}
+        <p className="wr-day-stats" style={{margin:"0 0 0.55rem",paddingBottom:"0.4rem",borderBottom: isHome ? "1px dashed #B5C8E2" : "1px dashed #D9C9B0",fontSize:11,color:"#5A4A3A",fontWeight:600}}>
+          <strong style={{color:"#2A2A1A",fontSize:12}}>{fmtTotalDuration(dayMs)}</strong> · <strong style={{color:"#2A2A1A",fontSize:12}}>{report.xpEarned||0}</strong> XP · <strong style={{color:"#2A2A1A",fontSize:12}}>{completedCount} / {assignedCount}</strong> done
+        </p>
+        {SLOTS.map(slot => {
+          const assignedIds = (studentAssignments && studentAssignments[slot.id]) || [];
+          const assignedItems = assignedIds.map(id => itemById[id]).filter(Boolean);
+          const showSkipped = slot.requiredForStreak;
+          const itemsToShow = showSkipped ? assignedItems : assignedItems.filter(item => report.completed[item.id]);
+          const label = slot.id === "AutoNav" ? "Auto-Nav" : slot.label;
+          return (
+            <div key={slot.id} className="wr-slot" style={{marginBottom:"0.5rem"}}>
+              <p className="wr-slot-header" style={{margin:"0 0 3px",fontSize:10,fontWeight:800,color:"#5A4A3A",textTransform:"uppercase",letterSpacing:"0.1em",borderBottom: isHome ? "1px solid #B5C8E2" : "1px solid #E5D5BB",paddingBottom:2}}>{label}</p>
+              {itemsToShow.length === 0
+                ? <p className="wr-empty-note" style={{margin:0,padding:2,fontSize:10,color:"#A89580",fontStyle:"italic"}}>— nothing completed —</p>
+                : itemsToShow.map(item => {
+                    const isDone = report.completed[item.id];
+                    return (
+                      <div key={item.id} className={`wr-item-row ${isDone ? "completed" : "skipped"}`} style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",padding:"2px 2px",fontSize:12,lineHeight:1.25}}>
+                        {isDone
+                          ? <>
+                              <span style={{color:"#1D7A5A",fontWeight:700}}>✓ {item.label}</span>
+                              <span className="wr-duration" style={{color:"#5A4A3A",fontSize:10,fontWeight:600,fontVariantNumeric:"tabular-nums"}}>{fmtDuration(report.durations[item.id])}</span>
+                            </>
+                          : <span style={{color:"#A89580",fontStyle:"italic"}}>○ {item.label}</span>
+                        }
+                      </div>
+                    );
+                  })}
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  function updateDate(idx, newDate) {
+    setDates(dates.map((d, i) => i === idx ? newDate : d));
+  }
+
+  return (
+    <div className="wr-backdrop" style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"flex-start",justifyContent:"center",zIndex:200,overflowY:"auto",padding:"1rem"}}>
+      <style>{`
+        @media print {
+          @page { margin: 0.4in; size: portrait; }
+          body { background: #FFFFFF !important; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+          body * { visibility: hidden !important; }
+          .wr-modal, .wr-modal * { visibility: visible !important; }
+          .wr-backdrop { position: static !important; background: transparent !important; padding: 0 !important; overflow: visible !important; display: block !important; visibility: hidden !important; }
+          .wr-modal { position: absolute !important; left: 0 !important; top: 0 !important; width: 100% !important; box-shadow: none !important; border: none !important; max-width: 100% !important; margin: 0 !important; padding: 0 !important; background: #FFFFFF !important; }
+          .wr-buttons, .wr-date-pickers { display: none !important; }
+          .wr-topbar { padding-bottom: 4px !important; margin-bottom: 6px !important; border-bottom-color: #2A2A1A !important; }
+          .wr-title { font-size: 14px !important; }
+          .wr-student-line { font-size: 12px !important; }
+          .wr-family-line { font-size: 10px !important; }
+          .wr-sep { font-size: 11px !important; }
+          .wr-meta-row { margin-bottom: 0.4rem !important; gap: 0.5rem !important; }
+          .wr-signature { gap: 0.6rem !important; margin-left: auto !important; }
+          .wr-day-cell { background: #FFFFFF !important; border: 1px solid #999 !important; padding: 0.4rem 0.5rem 0.5rem !important; break-inside: avoid !important; page-break-inside: avoid !important; }
+          .wr-day-cell.home { border: 1.5px solid #185FA5 !important; background: #FFFFFF !important; }
+          .wr-notes-cell { border: 1px dashed #2A2A1A !important; background: #FFFFFF !important; padding: 0.4rem 0.5rem 0.5rem !important; }
+          .wr-day-header { font-size: 11px !important; margin-bottom: 2px !important; }
+          .wr-home-tag { font-size: 8px !important; padding: 1px 5px !important; }
+          .wr-day-stats { font-size: 9px !important; margin-bottom: 0.3rem !important; padding-bottom: 0.2rem !important; }
+          .wr-day-stats strong { font-size: 9.5px !important; }
+          .wr-slot { margin-bottom: 0.3rem !important; }
+          .wr-slot-header { font-size: 8.5px !important; padding-bottom: 1px !important; margin-bottom: 2px !important; border-bottom-color: #2A2A1A !important; }
+          .wr-item-row { font-size: 10px !important; padding: 1px 1px !important; line-height: 1.2 !important; }
+          .wr-duration { font-size: 8.5px !important; }
+          .wr-empty-note { font-size: 9px !important; }
+          .wr-notes-header { font-size: 11px !important; padding-bottom: 2px !important; margin-bottom: 4px !important; border-bottom-color: #2A2A1A !important; }
+          .wr-note-day { font-size: 8.5px !important; margin-bottom: 2px !important; }
+          .wr-note-text { font-size: 9.5px !important; line-height: 1.25 !important; }
+          .wr-footer { margin-top: 0.5rem !important; padding-top: 0.4rem !important; font-size: 10px !important; }
+          .wr-totals { margin-bottom: 0 !important; }
+          .wr-sig-label { font-size: 8.5px !important; }
+        }
+      `}</style>
+      <div className="wr-modal" style={{background:"#F5E6D3",borderRadius:16,padding:"1.5rem 1.75rem 1.75rem",width:"100%",maxWidth:920,marginTop:"1rem",marginBottom:"1rem",border:"1px solid #D9C9B0",boxShadow:"0 8px 40px rgba(0,0,0,0.5)"}}>
+        <div className="wr-topbar" style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:"1rem",marginBottom:"1rem",paddingBottom:"0.85rem",borderBottom:"1.5px solid #D9C9B0",flexWrap:"wrap"}}>
+          <div className="wr-title-row" style={{display:"flex",alignItems:"baseline",gap:8,flexWrap:"wrap"}}>
+            <h3 className="wr-title" style={{margin:0,fontSize:22,fontWeight:800,color:"#2A2A1A",letterSpacing:"-0.01em"}}>Weekly Report</h3>
+            <span className="wr-sep" style={{color:"#A89580",fontWeight:700,fontSize:16}}>·</span>
+            <span className="wr-student-line" style={{fontSize:17,fontWeight:700,color:"#2A2A1A"}}>{student}</span>
+            <span className="wr-sep" style={{color:"#A89580",fontWeight:700,fontSize:16}}>·</span>
+            <span className="wr-family-line" style={{fontSize:14,color:"#776655",fontWeight:600}}>{family}</span>
+          </div>
+          <div className="wr-buttons" style={{display:"flex",gap:8,flexShrink:0}}>
+            <button onClick={()=>window.print()} style={{border:"none",borderRadius:8,padding:"10px 16px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit",background:"#8B5A3C",color:"#FBF1E2"}}>🖨️ Print</button>
+            <button onClick={onClose} style={{border:"none",borderRadius:8,padding:"10px 16px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit",background:"#D9C9B0",color:"#2A2A1A"}}>Close</button>
+          </div>
+        </div>
+
+        <div className="wr-meta-row" style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:"1.5rem",marginBottom:"1.25rem",flexWrap:"wrap"}}>
+          <div className="wr-date-pickers" style={{flex:"1 1 auto",minWidth:280}}>
+            <div style={{display:"flex",gap:"0.85rem",alignItems:"center",marginBottom:"0.5rem",flexWrap:"wrap"}}>
+              <span style={{fontSize:13,fontWeight:700,color:"#5A4A3A",textTransform:"uppercase",letterSpacing:"0.08em",minWidth:95}}>At School:</span>
+              {[0,1,2].map(i => (
+                <input key={i} type="date" value={dates[i]||""} onChange={e=>updateDate(i, e.target.value)} style={{background:"#FBF1E2",border:"1px solid #D9C9B0",borderRadius:8,padding:"8px 12px",fontSize:14,fontWeight:600,color:"#2A2A1A",fontFamily:"inherit"}}/>
+              ))}
+            </div>
+            <div style={{display:"flex",gap:"0.85rem",alignItems:"center",flexWrap:"wrap"}}>
+              <span style={{fontSize:13,fontWeight:700,color:"#5A4A3A",textTransform:"uppercase",letterSpacing:"0.08em",minWidth:95}}>At Home:</span>
+              {[3,4].map(i => (
+                <input key={i} type="date" value={dates[i]||""} onChange={e=>updateDate(i, e.target.value)} style={{background:"#F0F4FA",border:`1.5px solid ${BLUE}`,borderRadius:8,padding:"8px 12px",fontSize:14,fontWeight:600,color:"#2A2A1A",fontFamily:"inherit"}}/>
+              ))}
+            </div>
+          </div>
+          <div className="wr-signature" style={{display:"flex",gap:"1rem",alignItems:"flex-end",flexShrink:0}}>
+            <div style={{minWidth:180}}>
+              <div style={{borderBottom:"1px solid #2A2A1A",paddingBottom:1,minHeight:28}}></div>
+              <div className="wr-sig-label" style={{fontSize:11,color:"#776655",marginTop:3,fontWeight:600}}>Parent / Guardian Signature</div>
+            </div>
+            <div style={{minWidth:90}}>
+              <div style={{borderBottom:"1px solid #2A2A1A",paddingBottom:1,minHeight:28}}></div>
+              <div className="wr-sig-label" style={{fontSize:11,color:"#776655",marginTop:3,fontWeight:600}}>Date</div>
+            </div>
+          </div>
+        </div>
+
+        {loading
+          ? <p style={{color:"#776655",fontWeight:600,fontSize:15,textAlign:"center",padding:"2rem"}}>Loading reports…</p>
+          : <div className="wr-grid" style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:"0.85rem"}}>
+              {[0,1,2].map(i => <div key={i}>{renderDayCell(reports[i], dates[i], false)}</div>)}
+              {[3,4].map(i => <div key={i}>{renderDayCell(reports[i], dates[i], true)}</div>)}
+              <div className="wr-notes-cell" style={{background:"#FAF3E6",border:"1px dashed #C9B89A",borderRadius:12,padding:"0.75rem 0.85rem 0.85rem"}}>
+                <p className="wr-notes-header" style={{margin:"0 0 6px",fontSize:14,fontWeight:800,color:"#2A2A1A",textTransform:"uppercase",letterSpacing:"0.06em",borderBottom:"1.5px solid #D9C9B0",paddingBottom:4}}>📝 Notes</p>
+                {reports.map((r, i) => {
+                  const dk = dates[i];
+                  const isHome = i >= 3;
+                  const note = r && r.note;
+                  return (
+                    <div key={i} className="wr-note-entry" style={{marginBottom:"0.55rem",paddingBottom:"0.5rem",borderBottom: i < 4 ? "1px dotted #D9C9B0" : "none"}}>
+                      <p className="wr-note-day" style={{margin:"0 0 3px",fontSize:10,fontWeight:800,color:"#5A4A3A",textTransform:"uppercase",letterSpacing:"0.08em"}}>
+                        {dk ? fmtDateHeader(dk) : "—"}{isHome ? " 🏠" : ""}
+                      </p>
+                      {note
+                        ? <p className="wr-note-text" style={{margin:0,fontSize:12,color:"#2A2A1A",lineHeight:1.35,fontWeight:500}}>{note}</p>
+                        : <p className="wr-note-text" style={{margin:0,fontSize:12,color:"#A89580",fontStyle:"italic",lineHeight:1.35,fontWeight:500}}>— no note —</p>
+                      }
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+        }
+
+        <div className="wr-footer" style={{marginTop:"1.25rem",paddingTop:"0.85rem",borderTop:"1.5px solid #D9C9B0",fontSize:13,color:"#5A4A3A"}}>
+          <p className="wr-totals" style={{margin:0,fontWeight:600}}>
+            <strong style={{color:"#2A2A1A"}}>Totals across {schoolDays + homeDays} school days:</strong> {fmtTotalDuration(totalMs)} total time · {totalXP} XP earned · {totalCompleted} of {totalAssigned} assigned subjects completed · {schoolDays} at school · {homeDays} at home
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Student Screen ────────────────────────────────────────────────────────────
 function StudentScreen({name,session,streak,balance,slotAssignments,onUpdate,onBack,onSubmit}) {
   const [,setTick]=useState(0);
@@ -1151,6 +1476,8 @@ function TeacherView({families,sessions,teacherReports,approved,balances,streaks
   const [subScreen,setSubScreen]=useState("main");
   const [showSummary,setShowSummary]=useState(false);
   const [showAddTeacher,setShowAddTeacher]=useState(false);
+  const [weeklyPicker,setWeeklyPicker]=useState(false);
+  const [weeklyTarget,setWeeklyTarget]=useState(null); // {name, family} or null
   const [confirmModal,setConfirmModal]=useState(null);
   function showConfirm(msg,cb){ setConfirmModal({msg,cb}); }
   if(subScreen==="pins") return <ManagePINs families={families} pins={pins} onPinsChange={onPinsChange} onBack={()=>setSubScreen("main")}/>;
@@ -1162,6 +1489,8 @@ function TeacherView({families,sessions,teacherReports,approved,balances,streaks
       {confirmModal&&<ConfirmModal message={confirmModal.msg} onConfirm={()=>{confirmModal.cb();setConfirmModal(null);}} onCancel={()=>setConfirmModal(null)}/>}
       {showSummary&&<DailySummary reports={teacherReports} families={families} slotAssignments={studentSubjects} onClose={()=>setShowSummary(false)}/>}
       {showAddTeacher&&<AddTeacherModal onClose={()=>setShowAddTeacher(false)}/>}
+      {weeklyPicker&&<StudentPickerModal families={families} onPick={(name,famName)=>{setWeeklyPicker(false);setWeeklyTarget({name,family:famName});}} onClose={()=>setWeeklyPicker(false)}/>}
+      {weeklyTarget&&<WeeklyReport student={weeklyTarget.name} family={weeklyTarget.family} studentAssignments={(studentSubjects&&studentSubjects[weeklyTarget.name])||{}} onClose={()=>setWeeklyTarget(null)}/>}
       <div style={{display:"flex",gap:"1.25rem",marginBottom:"1.5rem",alignItems:"flex-start"}}>
         <div style={{flex:1}}>
           <button onClick={onBack} style={{fontWeight:700,fontSize:14,background:"#2a2a5a",color:"#ccc",border:"none",borderRadius:8,padding:"10px 16px",cursor:"pointer"}}>← Launch Pad</button>
@@ -1175,6 +1504,7 @@ function TeacherView({families,sessions,teacherReports,approved,balances,streaks
           <button onClick={()=>setSubScreen("students")} style={{fontWeight:700,fontSize:13,background:"#1a1a3a",color:"#ccc",border:"1px solid #2a2a5a",borderRadius:8,padding:"9px 14px",cursor:"pointer",textAlign:"right"}}>👥 Students</button>
           <button onClick={()=>setSubScreen("subjects")} style={{fontWeight:700,fontSize:13,background:"#1a1a3a",color:"#ccc",border:"1px solid #2a2a5a",borderRadius:8,padding:"9px 14px",cursor:"pointer",textAlign:"right"}}>📚 Subjects</button>
           <button onClick={()=>setShowSummary(true)} style={{fontWeight:700,fontSize:13,background:"#0a2a1a",color:GREEN,border:`1px solid ${GREEN}44`,borderRadius:8,padding:"9px 14px",cursor:"pointer",textAlign:"right"}}>📋 Summary</button>
+          <button onClick={()=>setWeeklyPicker(true)} style={{fontWeight:700,fontSize:13,background:"#0a1a2a",color:"#60aaff",border:`1px solid ${BLUE}55`,borderRadius:8,padding:"9px 14px",cursor:"pointer",textAlign:"right"}}>📅 Weekly Report</button>
           <button onClick={()=>showConfirm("Reset ALL students? Clears timers, checklists, and today's reports. XP and streaks are safe.",onResetAll)} style={{fontWeight:700,fontSize:13,background:"#2a0a0a",color:"#e05050",border:"1px solid #5a1a1a",borderRadius:8,padding:"9px 14px",cursor:"pointer",textAlign:"right"}}>🕐 Reset all</button>
           <button onClick={onTeacherSignOut} style={{fontWeight:700,fontSize:13,background:"transparent",color:"#555",border:"1px solid #2a2a5a",borderRadius:8,padding:"9px 14px",cursor:"pointer",textAlign:"right"}}>Sign out</button>
         </div>

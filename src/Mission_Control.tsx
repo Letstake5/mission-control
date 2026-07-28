@@ -169,6 +169,36 @@ function getRemainingMs(s) {
 }
 function normalizeId(name) { return name.replace(/[\s.]/g,"").toLowerCase(); }
 
+// One-time index builder (see app/submission_index in db.js PATHS). Historically,
+// Weekly Report found a student's recent submission dates by asking Firestore
+// "was there a report on this day?" one day at a time, sequentially, up to 60
+// days back — slow, and got worse the longer the school year ran. This walks
+// back once (in parallel, not sequentially) across ALL students at once, using
+// the existing per-day reports/<dateKey> docs (each already lists every
+// student), and builds a {studentName: [{date, location}, ...]} map. After this
+// runs once, the index doc exists and this function never runs again — new
+// entries are appended directly at submit time instead (see handleSubmit).
+async function backfillSubmissionIndex(students) {
+  const idx = {};
+  for (const name of students) idx[name] = [];
+  const DAY_MS = 24*60*60*1000;
+  const BACKFILL_DAYS = 120; // one-time safety window; plenty for a school year to date
+  const nowMs = Date.now();
+  const dateKeys = [];
+  for (let i = 0; i < BACKFILL_DAYS; i++) dateKeys.push(new Date(nowMs - i*DAY_MS).toISOString().slice(0,10));
+  const docs = await Promise.all(dateKeys.map(dk => fsGet(PATHS.reports(dk), null)));
+  docs.forEach((data, i) => {
+    if (!data || !data.list) return;
+    const dk = dateKeys[i];
+    data.list.forEach(r => {
+      if (!idx[r.student]) idx[r.student] = [];
+      idx[r.student].push({ date: dk, location: r.location === "home" ? "home" : "school" });
+    });
+  });
+  Object.keys(idx).forEach(name => idx[name].sort((a,b) => a.date.localeCompare(b.date)));
+  return idx;
+}
+
 // ── UI Primitives ─────────────────────────────────────────────────────────────
 function StarBadge({xp}) {
   return (
@@ -730,46 +760,27 @@ function StudentPickerModal({families, onPick, onClose}) {
 // (bottom row, blue border) + Notes column in the 6th cell. Reads from existing
 // reports/<dateKey> docs. Stage 4 will populate report.location and report.note
 // — until then, everything renders as school with no notes.
-function WeeklyReport({student, family, studentAssignments, onClose}) {
+function WeeklyReport({student, family, studentAssignments, submissionDates, onClose}) {
   const [dates, setDates] = useState(["","","","",""]);
   const [reports, setReports] = useState([null,null,null,null,null]);
   const [loading, setLoading] = useState(true);
   const [autoFilled, setAutoFilled] = useState(false);
 
-  // Walk back from today to find the 3 most recent school dates and 2 most
-  // recent home dates with submissions. "Home" is decided by report.location
-  // (Stage 4 field); absent or anything else = school. Stops at 60 days back
-  // as a safety limit. Until Stage 4 starts tagging home days, homeFound stays
-  // empty and the bottom row of date pickers auto-fills blank.
+  // Pick the 3 most recent school dates and 2 most recent home dates straight
+  // out of the submission index (see backfillSubmissionIndex / submissionIndex
+  // state in App) — no Firestore reads here at all. This replaced a day-by-day
+  // walk-back that scanned up to 60 days sequentially every time the report
+  // opened; that loop also never found home dates before Stage 4 shipped, so it
+  // always ran its full 60 iterations. Until Stage 4 tags home submissions,
+  // "home" stays empty here too and the bottom row auto-fills blank, same as before.
   useEffect(() => {
-    let cancelled = false;
-    async function fillDates() {
-      const schoolFound = [];
-      const homeFound = [];
-      const nowMs = Date.now();
-      const DAY_MS = 24*60*60*1000;
-      const MAX_DAYS_BACK = 60;
-      for (let i = 0; i < MAX_DAYS_BACK && (schoolFound.length < 3 || homeFound.length < 2); i++) {
-        const dk = new Date(nowMs - i*DAY_MS).toISOString().slice(0,10);
-        const data = await fsGet(PATHS.reports(dk), null);
-        if (cancelled) return;
-        if (data && data.list) {
-          const r = data.list.find(r => r.student === student);
-          if (r) {
-            if (r.location === "home" && homeFound.length < 2) homeFound.push(dk);
-            else if (r.location !== "home" && schoolFound.length < 3) schoolFound.push(dk);
-          }
-        }
-      }
-      const newDates = [
-        schoolFound[0] || "", schoolFound[1] || "", schoolFound[2] || "",
-        homeFound[0]   || "", homeFound[1]   || "",
-      ];
-      if (!cancelled) { setDates(newDates); setAutoFilled(true); }
-    }
-    fillDates();
-    return () => { cancelled = true; };
-  }, [student]);
+    const all = submissionDates || [];
+    const school = all.filter(e => e.location !== "home").map(e => e.date).sort().reverse().slice(0,3);
+    const home   = all.filter(e => e.location === "home").map(e => e.date).sort().reverse().slice(0,2);
+    const newDates = [school[0]||"", school[1]||"", school[2]||"", home[0]||"", home[1]||""];
+    setDates(newDates);
+    setAutoFilled(true);
+  }, [student, submissionDates]);
 
   // Load the report for each picked date (re-runs whenever a date changes).
   useEffect(() => {
@@ -1472,7 +1483,7 @@ function ManageSubjects({ families, studentSubjects, onSubjectsChange, onBack })
 }
 
 // ── Teacher View ──────────────────────────────────────────────────────────────
-function TeacherView({families,sessions,teacherReports,approved,balances,streaks,pins,teacherUser,onApprove,onResetAll,onResetStudent,onFamiliesChange,onBalanceUpdate,onPinsChange,onBack,onTeacherSignOut,studentSubjects,onSubjectsChange}) {
+function TeacherView({families,sessions,teacherReports,approved,balances,streaks,pins,teacherUser,onApprove,onResetAll,onResetStudent,onFamiliesChange,onBalanceUpdate,onPinsChange,onBack,onTeacherSignOut,studentSubjects,onSubjectsChange,submissionIndex}) {
   const [subScreen,setSubScreen]=useState("main");
   const [showSummary,setShowSummary]=useState(false);
   const [showAddTeacher,setShowAddTeacher]=useState(false);
@@ -1490,7 +1501,7 @@ function TeacherView({families,sessions,teacherReports,approved,balances,streaks
       {showSummary&&<DailySummary reports={teacherReports} families={families} slotAssignments={studentSubjects} onClose={()=>setShowSummary(false)}/>}
       {showAddTeacher&&<AddTeacherModal onClose={()=>setShowAddTeacher(false)}/>}
       {weeklyPicker&&<StudentPickerModal families={families} onPick={(name,famName)=>{setWeeklyPicker(false);setWeeklyTarget({name,family:famName});}} onClose={()=>setWeeklyPicker(false)}/>}
-      {weeklyTarget&&<WeeklyReport student={weeklyTarget.name} family={weeklyTarget.family} studentAssignments={(studentSubjects&&studentSubjects[weeklyTarget.name])||{}} onClose={()=>setWeeklyTarget(null)}/>}
+      {weeklyTarget&&<WeeklyReport student={weeklyTarget.name} family={weeklyTarget.family} studentAssignments={(studentSubjects&&studentSubjects[weeklyTarget.name])||{}} submissionDates={(submissionIndex&&submissionIndex[weeklyTarget.name])||[]} onClose={()=>setWeeklyTarget(null)}/>}
       <div style={{display:"flex",gap:"1.25rem",marginBottom:"1.5rem",alignItems:"flex-start"}}>
         <div style={{flex:1}}>
           <button onClick={onBack} style={{fontWeight:700,fontSize:14,background:"#2a2a5a",color:"#ccc",border:"none",borderRadius:8,padding:"10px 16px",cursor:"pointer"}}>← Launch Pad</button>
@@ -1571,6 +1582,10 @@ export default function App() {
   const [balances,setBalances]=useState({});
   const [streaks,setStreaks]=useState({});
   const [studentSubjects,setStudentSubjects]=useState({});
+  // Per-student index of {date, location} for past submissions, used by Weekly
+  // Report to find recent dates instantly instead of scanning day-by-day.
+  // See backfillSubmissionIndex() and app/submission_index in db.js PATHS.
+  const [submissionIndex,setSubmissionIndex]=useState({});
   const [streakPopup,setStreakPopup]=useState(null);
   const [dataLoading,setDataLoading]=useState(true);
   // Tracks the last sessions JSON we saved or received, so the auto-save and
@@ -1599,7 +1614,8 @@ export default function App() {
       fsGet(PATHS.reports(todayKey()), null),
       fsGet(PATHS.sessions(todayKey()), null),
       fsGet(PATHS.studentSubjects, {}),
-    ]).then(([fams,bals,stks,pns,reports,liveSessions,subs])=>{
+      fsGet(PATHS.submissionIndex, null),
+    ]).then(async ([fams,bals,stks,pns,reports,liveSessions,subs,subIndex])=>{
       setFamilies(fams); setBalances(bals); setStreaks(stks); setPins(pns);
       // Seed slot assignments: ensure every current student has an entry.
       // Existing entries are preserved; new students get five empty slots.
@@ -1609,6 +1625,16 @@ export default function App() {
         if(!seeded[name]) seeded[name]={Math:[],ELA:[],Core:[],AutoNav:[],Skills:[]};
       }
       setStudentSubjects(seeded);
+
+      // Load the submission-date index, or build it once if it doesn't exist yet
+      // (first run after this feature ships). See backfillSubmissionIndex() above.
+      if(subIndex){
+        setSubmissionIndex(subIndex);
+      } else {
+        const built=await backfillSubmissionIndex(allStudents);
+        setSubmissionIndex(built);
+        fsSet(PATHS.submissionIndex, built);
+      }
 
       // Reconstruct submitted-day sessions from reports as a baseline.
       const rs={};
@@ -1725,12 +1751,34 @@ export default function App() {
       earlyMins:final.earlyMins,xpEarned:final.xpEarned,date:new Date().toLocaleDateString()};
     const newReports=[...teacherReports,newReport];
     setTeacherReports(newReports); saveReports(newReports,approved);
+
+    // Record today's date in the submission index (see backfillSubmissionIndex)
+    // so Weekly Report can find it instantly instead of scanning day-by-day.
+    // Dedupe on date in case of a same-day resubmit after a reset.
+    const todayDk=todayKey();
+    const location=final.location==="home" ? "home" : "school"; // Stage 4 sets this; school by default today
+    setSubmissionIndex(idx=>{
+      const list=(idx[name]||[]).filter(e=>e.date!==todayDk);
+      const next={...idx,[name]:[...list,{date:todayDk,location}]};
+      fsSet(PATHS.submissionIndex, next);
+      return next;
+    });
+
     setActiveStudent(null); setScreen("done_"+name);
   }
 
   function handleResetAll(){
     setSessions({}); setTeacherReports([]); setApproved({});
     saveReports([],{}); setScreen("launchpad");
+    // Today's submissions are being wiped — strip today's date out of every
+    // student's index entry so it doesn't falsely show as "submitted".
+    const todayDk=todayKey();
+    setSubmissionIndex(idx=>{
+      const next={};
+      Object.keys(idx).forEach(name=>{ next[name]=(idx[name]||[]).filter(e=>e.date!==todayDk); });
+      fsSet(PATHS.submissionIndex, next);
+      return next;
+    });
   }
   function handleResetStudent(name){
     setSessions(s=>{ const n={...s}; delete n[name]; return n; });
@@ -1740,6 +1788,13 @@ export default function App() {
       setApproved(newApp);
       const next=prev.filter(r=>r.student!==name);
       saveReports(next,newApp); return next;
+    });
+    // Same as handleResetAll, but scoped to just this student's today entry.
+    const todayDk=todayKey();
+    setSubmissionIndex(idx=>{
+      const next={...idx,[name]:(idx[name]||[]).filter(e=>e.date!==todayDk)};
+      fsSet(PATHS.submissionIndex, next);
+      return next;
     });
   }
   function handleApprove(i){ const a={...approved,[i]:true}; setApproved(a); saveReports(teacherReports,a); }
@@ -1773,6 +1828,7 @@ export default function App() {
       onFamiliesChange={f=>setFamilies(f)} onBalanceUpdate={(n,v)=>setBalances(b=>({...b,[n]:v}))}
       onPinsChange={setPins} onBack={()=>setScreen("launchpad")}
       studentSubjects={studentSubjects} onSubjectsChange={setStudentSubjects}
+      submissionIndex={submissionIndex}
       onTeacherSignOut={handleTeacherSignOut}/>
   );
 

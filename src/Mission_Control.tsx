@@ -141,6 +141,20 @@ const SLOTS = [
   { id:"Skills",  label:"Skills",                requiredForStreak:false },
 ];
 
+// Stage 3f — TEST checkboxes. Math and ELA each get one TEST checkbox; Core
+// gets four (Science, History, Spelling, Written Assignment) since a testing
+// day can cover more than one Core subject. Checking a TEST checkbox is worth
+// 5 XP and satisfies that slot's streak requirement for the day, regardless of
+// whether the slot's regular assigned items are checked or left blank —
+// students can do both the test and the regular work, or just the test.
+const CORE_TEST_OPTIONS = [
+  { key:"science", label:"Science" },
+  { key:"history", label:"History" },
+  { key:"spelling", label:"Spelling" },
+  { key:"written", label:"Written Assignment" },
+];
+const TEST_XP = 5;
+
 const TOTAL_MS = 2.5*60*60*1000;
 const TRACK_HEIGHT = 340;
 const BG="#0a0a1a", CARD="#13132a", ACCENT="#f0c040", GREEN="#1D9E75", BLUE="#185FA5";
@@ -161,7 +175,20 @@ function todayKey() { return new Date().toISOString().slice(0,10); }
 function initSession() {
   return {completed:{},timestamps:{},durations:{},startEpoch:null,pausedRemainingMs:TOTAL_MS,
     isPaused:true,lastSubjectEpoch:null,startTimeStr:null,submitted:false,
-    finishTimeStr:null,earlyMins:0,launched:false};
+    finishTimeStr:null,earlyMins:0,launched:false,
+    testFlags:{Math:false,ELA:false,Core:{science:false,history:false,spelling:false,written:false}}};
+}
+// Returns a short badge string ("TEST" or "TEST: Science, Spelling") for a
+// slot on a submitted report, or null if no TEST box was checked for that
+// slot. Used by DailySummary and WeeklyReport to annotate the slot header.
+function testLabelFor(slot, testFlags) {
+  if (!testFlags) return null;
+  if (slot.id === "Core") {
+    const checked = CORE_TEST_OPTIONS.filter(o => testFlags.Core && testFlags.Core[o.key]).map(o => o.label);
+    return checked.length ? `TEST: ${checked.join(", ")}` : null;
+  }
+  if (slot.id === "Math" || slot.id === "ELA") return testFlags[slot.id] ? "TEST" : null;
+  return null;
 }
 function getRemainingMs(s) {
   if(s.isPaused||!s.startEpoch) return s.pausedRemainingMs;
@@ -213,6 +240,21 @@ function StreakBar({streak}) {
     <div style={{display:"flex",alignItems:"center",gap:5,background:"#1a1a35",borderRadius:20,padding:"4px 12px",border:"1px solid #ff6b3555"}}>
       <span style={{fontSize:13}}>🔥</span>
       <span style={{fontWeight:800,fontSize:13,color:"#ff9955"}}>{streak}/{MAX_STREAK}</span>
+    </div>
+  );
+}
+// One row inside a slot's TEST panel (see StudentScreen). Deliberately about a
+// quarter the visual size of a regular pantry-item row — smaller checkbox,
+// smaller text — since it's a secondary, occasional option next to the day's
+// main checklist, not a full pantry item.
+function TestCheckboxRow({checked, label, onClick, dimmed}) {
+  return (
+    <div onClick={onClick} style={{display:"flex",alignItems:"center",gap:6,padding:"3px 2px",cursor:onClick?"pointer":"default",opacity:dimmed?0.4:1,transition:"opacity 0.2s"}}>
+      <div style={{width:14,height:14,borderRadius:4,border:`2px solid ${checked?GREEN:"#2a2a5a"}`,background:checked?GREEN:"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"all 0.2s"}}>
+        {checked && <span style={{color:"#fff",fontSize:9,fontWeight:700,lineHeight:1}}>✓</span>}
+      </div>
+      <span style={{flex:1,fontSize:10,fontWeight:800,color:checked?GREEN:"#999",textTransform:"uppercase",letterSpacing:"0.03em"}}>{label}</span>
+      <span style={{fontSize:9,fontWeight:700,color:ACCENT,opacity:0.8}}>+{TEST_XP}</span>
     </div>
   );
 }
@@ -630,6 +672,7 @@ function DailySummary({reports, families, slotAssignments, onClose}) {
           .ds-slot-grid { column-count: 2 !important; column-gap: 1.25rem !important; column-rule: 1px solid #E5D5BB !important; }
           .ds-slot { break-inside: avoid !important; page-break-inside: avoid !important; margin-bottom: 0.45rem !important; display: block !important; }
           .ds-slot-header { font-size: 9.5px !important; letter-spacing: 0.08em !important; padding-bottom: 1px !important; margin-bottom: 2px !important; border-bottom-color: #2A2A1A !important; }
+          .ds-test-badge { font-size: 8px !important; padding: 1px 5px !important; margin-left: 5px !important; }
           .ds-item { font-size: 11px !important; padding: 2px 2px !important; }
           .ds-duration { font-size: 10px !important; }
           .ds-empty-note { font-size: 9px !important; padding: 2px !important; }
@@ -680,9 +723,13 @@ function DailySummary({reports, families, slotAssignments, onClose}) {
                             const itemsToShow = showSkipped
                               ? assignedItems
                               : assignedItems.filter(item => r.completed[item.id]);
+                            const testLabel = testLabelFor(slot, r.testFlags);
                             return (
                               <div key={slot.id} className="ds-slot" style={{marginBottom:"0.95rem"}}>
-                                <p className="ds-slot-header" style={{margin:"0 0 6px",fontSize:13,fontWeight:800,color:"#5A4A3A",textTransform:"uppercase",letterSpacing:"0.11em",borderBottom:"1px solid #E5D5BB",paddingBottom:4}}>{slot.label}</p>
+                                <p className="ds-slot-header" style={{margin:"0 0 6px",fontSize:13,fontWeight:800,color:"#5A4A3A",textTransform:"uppercase",letterSpacing:"0.11em",borderBottom:"1px solid #E5D5BB",paddingBottom:4}}>
+                                  {slot.label}
+                                  {testLabel && <span className="ds-test-badge" style={{marginLeft:8,fontSize:11,fontWeight:800,color:"#8B5A3C",background:"#E8D9BE",padding:"2px 8px",borderRadius:999,letterSpacing:"0.03em",textTransform:"none"}}>{testLabel}</span>}
+                                </p>
                                 {itemsToShow.length === 0
                                   ? <p className="ds-empty-note" style={{margin:0,padding:"6px 4px",fontSize:14,color:"#A89580",fontStyle:"italic"}}>— nothing completed —</p>
                                   : itemsToShow.map(item => {
@@ -878,9 +925,13 @@ function WeeklyReport({student, family, studentAssignments, submissionDates, onC
           const showSkipped = slot.requiredForStreak;
           const itemsToShow = showSkipped ? assignedItems : assignedItems.filter(item => report.completed[item.id]);
           const label = slot.id === "AutoNav" ? "Auto-Nav" : slot.label;
+          const testLabel = testLabelFor(slot, report.testFlags);
           return (
             <div key={slot.id} className="wr-slot" style={{marginBottom:"0.5rem"}}>
-              <p className="wr-slot-header" style={{margin:"0 0 3px",fontSize:10,fontWeight:800,color:"#5A4A3A",textTransform:"uppercase",letterSpacing:"0.1em",borderBottom: isHome ? "1px solid #B5C8E2" : "1px solid #E5D5BB",paddingBottom:2}}>{label}</p>
+              <p className="wr-slot-header" style={{margin:"0 0 3px",fontSize:10,fontWeight:800,color:"#5A4A3A",textTransform:"uppercase",letterSpacing:"0.1em",borderBottom: isHome ? "1px solid #B5C8E2" : "1px solid #E5D5BB",paddingBottom:2}}>
+                {label}
+                {testLabel && <span className="wr-test-badge" style={{marginLeft:5,fontSize:8,fontWeight:800,color:"#8B5A3C",background:"#E8D9BE",padding:"1px 5px",borderRadius:999,letterSpacing:"0.02em",textTransform:"none"}}>{testLabel}</span>}
+              </p>
               {itemsToShow.length === 0
                 ? <p className="wr-empty-note" style={{margin:0,padding:2,fontSize:10,color:"#A89580",fontStyle:"italic"}}>— nothing completed —</p>
                 : itemsToShow.map(item => {
@@ -931,6 +982,7 @@ function WeeklyReport({student, family, studentAssignments, submissionDates, onC
           .wr-notes-cell { border: 1px dashed #2A2A1A !important; background: #FFFFFF !important; padding: 0.4rem 0.5rem 0.5rem !important; }
           .wr-day-header { font-size: 11px !important; margin-bottom: 2px !important; }
           .wr-home-tag { font-size: 8px !important; padding: 1px 5px !important; }
+          .wr-test-badge { font-size: 7px !important; padding: 1px 4px !important; margin-left: 4px !important; }
           .wr-day-stats { font-size: 9px !important; margin-bottom: 0.3rem !important; padding-bottom: 0.2rem !important; }
           .wr-day-stats strong { font-size: 9.5px !important; }
           .wr-slot { margin-bottom: 0.3rem !important; }
@@ -1056,8 +1108,22 @@ function StudentScreen({name,session,streak,balance,slotAssignments,onUpdate,onB
   const doneCount = visibleItems.filter(it=>session.completed[it.id]).length;
   const progress = totalItemCount>0 ? doneCount/totalItemCount : 0;
   const isRunning=!session.isPaused&&session.startEpoch!=null;
-  const allDone = totalItemCount>0 && doneCount===totalItemCount;
-  const sessionXP = visibleItems.reduce((sum,it)=>sum+(session.completed[it.id]?it.xp:0),0);
+  const testFlags = session.testFlags||{Math:false,ELA:false,Core:{}};
+  const testXP = (testFlags.Math?TEST_XP:0) + (testFlags.ELA?TEST_XP:0)
+    + CORE_TEST_OPTIONS.filter(o=>testFlags.Core&&testFlags.Core[o.key]).length*TEST_XP;
+  const sessionXP = visibleItems.reduce((sum,it)=>sum+(session.completed[it.id]?it.xp:0),0) + testXP;
+  // A slot counts as "squared away" for the celebration/submit-button state if
+  // either its assigned items are all checked, OR (for Math/ELA/Core) its TEST
+  // box is checked — a testing day doesn't require the regular work too.
+  function isSlotSquaredAway(slot) {
+    const items = itemsBySlot[slot.id];
+    const itemsDone = items.length===0 || items.every(it=>session.completed[it.id]);
+    if (itemsDone) return true;
+    if (slot.id==="Math"||slot.id==="ELA") return !!testFlags[slot.id];
+    if (slot.id==="Core") return CORE_TEST_OPTIONS.some(o=>testFlags.Core&&testFlags.Core[o.key]);
+    return false;
+  }
+  const allDone = totalItemCount>0 && SLOTS.every(isSlotSquaredAway);
 
   useEffect(()=>{
     if(allDone&&!completeFired&&session.startTimeStr){ setShowComplete(true); setCompleteFired(true); }
@@ -1086,6 +1152,24 @@ function StudentScreen({name,session,streak,balance,slotAssignments,onUpdate,onB
     if(comp[id]){ delete comp[id]; delete ts[id]; delete dur[id]; }
     else { comp[id]=true; ts[id]=nowStr(); dur[id]=session.lastSubjectEpoch?now-session.lastSubjectEpoch:0; burst(subj.xp); }
     onUpdate({...session,completed:comp,timestamps:ts,durations:dur,lastSubjectEpoch:now});
+  }
+  // subKey is only used for Core ("science"/"history"/"spelling"/"written");
+  // Math and ELA each have a single flag.
+  function handleToggleTest(slotId, subKey) {
+    if(session.submitted||session.isPaused) return;
+    const tf = {Math:false,ELA:false,Core:{},...(session.testFlags||{})};
+    if(slotId==="Core"){
+      const core = {...(tf.Core||{})};
+      const turningOn = !core[subKey];
+      core[subKey] = turningOn;
+      tf.Core = core;
+      if(turningOn) burst(TEST_XP);
+    } else {
+      const turningOn = !tf[slotId];
+      tf[slotId] = turningOn;
+      if(turningOn) burst(TEST_XP);
+    }
+    onUpdate({...session, testFlags: tf});
   }
   function handleSubmit() {
     const rem=getRemainingMs(session);
@@ -1147,21 +1231,52 @@ function StudentScreen({name,session,streak,balance,slotAssignments,onUpdate,onB
           </div>
           {SLOTS.map(slot=>{
             const items = itemsBySlot[slot.id];
-            if(items.length===0) return null;
+            const hasTest = slot.id==="Math"||slot.id==="ELA"||slot.id==="Core";
+            if(items.length===0 && !hasTest) return null;
+            const testDisabled = session.submitted||session.isPaused;
+            const itemList = (
+              <>
+                {items.length===0
+                  ? <div style={{padding:"10px 12px",fontSize:13,color:"#555",fontStyle:"italic"}}>No items assigned</div>
+                  : items.map(s=>(
+                    <div key={s.id} onClick={()=>handleCheck(s.id)}
+                      style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",marginBottom:4,background:session.completed[s.id]?"#0a2a1a":CARD,border:`1px solid ${session.completed[s.id]?"#1D9E7588":"#2a2a5a"}`,borderRadius:10,cursor:(!isRunning||session.submitted)?"default":"pointer",opacity:!isRunning&&!session.completed[s.id]?0.4:1,transition:"all 0.2s",boxShadow:session.completed[s.id]?`0 0 8px ${GREEN}22`:undefined}}>
+                      <div style={{width:20,height:20,borderRadius:5,border:`2px solid ${session.completed[s.id]?GREEN:"#2a2a5a"}`,background:session.completed[s.id]?GREEN:"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"all 0.2s"}}>
+                        {session.completed[s.id]&&<span style={{color:"#fff",fontSize:13,fontWeight:700,lineHeight:1}}>✓</span>}
+                      </div>
+                      <span style={{flex:1,fontSize:15,fontWeight:600,color:session.completed[s.id]?GREEN:"#ccc",textDecoration:session.completed[s.id]?"line-through":"none"}}>{s.label}</span>
+                      <span style={{fontSize:12,fontWeight:700,color:ACCENT,opacity:0.7}}>+{s.xp}</span>
+                      {session.timestamps[s.id]&&<span style={{fontSize:11,fontWeight:600,color:"#555"}}>{session.timestamps[s.id]}</span>}
+                    </div>
+                  ))}
+              </>
+            );
             return (
               <div key={slot.id} style={{marginBottom:"0.65rem"}}>
                 <p style={{margin:"0 0 5px",fontSize:12,fontWeight:700,color:"#555",textTransform:"uppercase",letterSpacing:"0.08em"}}>{slot.label}</p>
-                {items.map(s=>(
-                  <div key={s.id} onClick={()=>handleCheck(s.id)}
-                    style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",marginBottom:4,background:session.completed[s.id]?"#0a2a1a":CARD,border:`1px solid ${session.completed[s.id]?"#1D9E7588":"#2a2a5a"}`,borderRadius:10,cursor:(!isRunning||session.submitted)?"default":"pointer",opacity:!isRunning&&!session.completed[s.id]?0.4:1,transition:"all 0.2s",boxShadow:session.completed[s.id]?`0 0 8px ${GREEN}22`:undefined}}>
-                    <div style={{width:20,height:20,borderRadius:5,border:`2px solid ${session.completed[s.id]?GREEN:"#2a2a5a"}`,background:session.completed[s.id]?GREEN:"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"all 0.2s"}}>
-                      {session.completed[s.id]&&<span style={{color:"#fff",fontSize:13,fontWeight:700,lineHeight:1}}>✓</span>}
+                {hasTest ? (
+                  <div style={{display:"flex",gap:8,alignItems:"stretch"}}>
+                    <div style={{flex:3,minWidth:0}}>{itemList}</div>
+                    <div style={{flex:1,background:CARD,border:"1px solid #2a2a5a",borderRadius:10,padding:"6px 8px",display:"flex",flexDirection:"column",justifyContent:"center",gap:2}}>
+                      {slot.id!=="Core" ? (
+                        <TestCheckboxRow
+                          checked={!!testFlags[slot.id]}
+                          label="Test"
+                          dimmed={!isRunning}
+                          onClick={testDisabled?undefined:()=>handleToggleTest(slot.id)}
+                        />
+                      ) : CORE_TEST_OPTIONS.map(opt=>(
+                        <TestCheckboxRow
+                          key={opt.key}
+                          checked={!!(testFlags.Core&&testFlags.Core[opt.key])}
+                          label={opt.label}
+                          dimmed={!isRunning}
+                          onClick={testDisabled?undefined:()=>handleToggleTest("Core",opt.key)}
+                        />
+                      ))}
                     </div>
-                    <span style={{flex:1,fontSize:15,fontWeight:600,color:session.completed[s.id]?GREEN:"#ccc",textDecoration:session.completed[s.id]?"line-through":"none"}}>{s.label}</span>
-                    <span style={{fontSize:12,fontWeight:700,color:ACCENT,opacity:0.7}}>+{s.xp}</span>
-                    {session.timestamps[s.id]&&<span style={{fontSize:11,fontWeight:600,color:"#555"}}>{session.timestamps[s.id]}</span>}
                   </div>
-                ))}
+                ) : itemList}
               </div>
             );
           })}
@@ -1735,12 +1850,25 @@ export default function App() {
 
   function handleSubmit(name,final){
     setSessions(s=>({...s,[name]:final}));
-    const requiredIds=SLOTS.filter(slot=>slot.requiredForStreak).flatMap(slot=>(studentSubjects?.[name]?.[slot.id])||[]);const allDone=requiredIds.length>0 && requiredIds.every(id=>final.completed[id]);
+    // A required slot (Math/ELA/Core) is "done" for streak purposes if either
+    // all of its assigned items are checked, or its TEST checkbox is checked
+    // (any one of the four, for Core) — see Stage 3f. A slot with nothing
+    // assigned in it is trivially done so it can't block the streak.
+    function isSlotDone(slotId){
+      const ids=(studentSubjects?.[name]?.[slotId])||[];
+      const itemsDone = ids.length===0 || ids.every(id=>final.completed[id]);
+      if(itemsDone) return true;
+      if(slotId==="Core") return CORE_TEST_OPTIONS.some(o=>final.testFlags?.Core?.[o.key]);
+      return !!(final.testFlags && final.testFlags[slotId]);
+    }
+    const requiredSlotIds=SLOTS.filter(slot=>slot.requiredForStreak).map(slot=>slot.id);
+    const anyRequiredAssigned=requiredSlotIds.some(id=>((studentSubjects?.[name]?.[id])||[]).length>0);
+    const allDone=anyRequiredAssigned && requiredSlotIds.every(isSlotDone);
     const newStreaks={...streaks};
     const cur=newStreaks[name]||{count:0};
     let newCount=cur.count;
     if(allDone){ newCount=cur.count+1; if(newCount>MAX_STREAK) newCount=0; }
-    else if(final.launched && requiredIds.length>0){ newCount=0; }
+    else if(final.launched && anyRequiredAssigned){ newCount=0; }
     newStreaks[name]={count:newCount,lastCompleted:Date.now()};
     setStreaks(newStreaks);
     setTimeout(()=>setStreakPopup({name,streak:newCount,wasMax:newCount===0&&cur.count===MAX_STREAK}),400);
@@ -1748,7 +1876,7 @@ export default function App() {
     setBalances(newBal);
     const newReport={student:name,startTime:final.startTimeStr,finishTime:final.finishTimeStr,
       completed:final.completed,timestamps:final.timestamps,durations:final.durations,
-      earlyMins:final.earlyMins,xpEarned:final.xpEarned,date:new Date().toLocaleDateString()};
+      earlyMins:final.earlyMins,xpEarned:final.xpEarned,testFlags:final.testFlags,date:new Date().toLocaleDateString()};
     const newReports=[...teacherReports,newReport];
     setTeacherReports(newReports); saveReports(newReports,approved);
 

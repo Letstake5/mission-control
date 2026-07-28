@@ -249,12 +249,12 @@ function StreakBar({streak}) {
 // main checklist, not a full pantry item.
 function TestCheckboxRow({checked, label, onClick, dimmed}) {
   return (
-    <div onClick={onClick} style={{display:"flex",alignItems:"center",gap:6,padding:"3px 2px",cursor:onClick?"pointer":"default",opacity:dimmed?0.4:1,transition:"opacity 0.2s"}}>
-      <div style={{width:14,height:14,borderRadius:4,border:`2px solid ${checked?GREEN:"#2a2a5a"}`,background:checked?GREEN:"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"all 0.2s"}}>
-        {checked && <span style={{color:"#fff",fontSize:9,fontWeight:700,lineHeight:1}}>✓</span>}
+    <div onClick={onClick} style={{display:"flex",alignItems:"center",gap:7,padding:"4px 2px",cursor:onClick?"pointer":"default",opacity:dimmed?0.4:1,transition:"opacity 0.2s"}}>
+      <div style={{width:18,height:18,borderRadius:5,border:`2px solid ${checked?GREEN:"#2a2a5a"}`,background:checked?GREEN:"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"all 0.2s"}}>
+        {checked && <span style={{color:"#fff",fontSize:11,fontWeight:700,lineHeight:1}}>✓</span>}
       </div>
-      <span style={{flex:1,fontSize:10,fontWeight:800,color:checked?GREEN:"#999",textTransform:"uppercase",letterSpacing:"0.03em"}}>{label}</span>
-      <span style={{fontSize:9,fontWeight:700,color:ACCENT,opacity:0.8}}>+{TEST_XP}</span>
+      <span style={{flex:1,fontSize:15,fontWeight:800,color:checked?GREEN:"#ccc",textTransform:"uppercase",letterSpacing:"0.03em",lineHeight:1.15}}>{label}</span>
+      <span style={{fontSize:11,fontWeight:700,color:ACCENT,opacity:0.8}}>+{TEST_XP}</span>
     </div>
   );
 }

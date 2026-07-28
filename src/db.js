@@ -41,6 +41,7 @@ export const PATHS = {
   streaks:  "app/streaks",
   pins:     "app/pins",
   studentSubjects: "app/student_subjects",
+  submissionIndex: "app/submission_index",
   reports:  (dateKey) => `reports/${dateKey}`,
   sessions: (dateKey) => `sessions/${dateKey}`, 
 };
